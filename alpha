@@ -1,0 +1,712 @@
+-- ====================================
+-- SCRIPT TELEPORT KIOS + AUTO PROXIMTY PROMPT (IMPROVED - FIXED)
+-- By: SAPIGANTENG
+-- Fixed & Optimized Version (EXECUTOR)
+-- ====================================
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+if not player then
+    warn("❌ LocalPlayer tidak ditemukan!")
+    return
+end
+
+-- Daftar Lokasi Teleport (Sesuai Kategori)
+local LOCATION_CATEGORIES = {
+    {
+        category = "Meja Makan",
+        locations = {
+            {name = "Jamur Rebus", searchNames = {"JamurKuburan", "JamurRebus", "Item_JamurRebus", "jamur_rebus"}},
+            {name = "Pisang Raja Rebus", searchNames = {"PisangRajaRebus", "Pisang_Raja_Rebus", "Pisang Raja Rebus", "Item_PisangRajaRebus", "pisang_raja_rebus", "PisangRaja"}},
+            {name = "Sate Gagak", searchNames = {"SateGagak", "Sate_Gagak", "Sate Gagak", "sate_gagak"}},
+            {name = "Sate Kepiting", searchNames = {"SateKepiting", "Sate_Kepiting", "Sate Kepiting", "sate_kepiting"}},
+            {name = "Tumis Kamboja", searchNames = {"TumisKamboja", "Tumis_Kamboja", "Tumis Kamboja", "tumis_kamboja"}},
+        }
+    },
+    {
+        category = "Rak",
+        locations = {
+            {name = "Rak Dupa", searchNames = {"RakDupa", "Rak_Dupa", "Rak Dupa", "rak_dupa"}},
+            {name = "Rak Kemenyan", searchNames = {"RakKemenyan", "Rak_Kemenyan", "Rak Kemenyan", "rak_kemenyan"}},
+            {name = "Rak Kepiting", searchNames = {"RakKepiting", "Rak_Kepiting", "Rak Kepiting", "rak_kepiting"}},
+            {name = "Rak Melati", searchNames = {"RakMelati", "Rak_Melati", "Rak Melati", "rak_melati"}},
+        }
+    },
+    {
+        category = "Alat Masak",
+        locations = {
+            {name = "Pemotongan", searchNames = {"Pemotongan", "pemotongan", "AlatMasak"}},
+        }
+    }
+}
+
+-- FUNGSI UNTUK SCAN SEMUA OBJECT DI WORKSPACE
+local function scanAllObjects()
+    print("\n🔍 SCANNING WORKSPACE...")
+    local allObjects = {}
+    
+    for _, obj in pairs(game.Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            table.insert(allObjects, {
+                name = obj.Name,
+                type = obj.ClassName,
+                parent = obj.Parent.Name
+            })
+        end
+    end
+    
+    print("📌 Daftar semua object di workspace:")
+    for i, obj in ipairs(allObjects) do
+        if i <= 50 then  -- Tampilkan 50 pertama
+            print("  " .. obj.name .. " (" .. obj.type .. ") - Parent: " .. obj.parent)
+        end
+    end
+    print("... dan " .. (#allObjects - 50) .. " object lainnya\n")
+end
+
+-- PINDAI DULU
+scanAllObjects()
+
+-- Fungsi untuk auto-detect lokasi di workspace (TANPA filter owner dulu)
+local function autoDetectLocations()
+    local categoryMap = {}
+
+    for _, category in ipairs(LOCATION_CATEGORIES) do
+        categoryMap[category.category] = {}
+        
+        for _, locationInfo in ipairs(category.locations) do
+            local found = false
+            
+            for _, obj in pairs(game.Workspace:GetDescendants()) do
+                if not found then
+                    for _, searchName in ipairs(locationInfo.searchNames) do
+                        if string.lower(obj.Name) == string.lower(searchName) then
+                            local targetPart = obj
+                            if obj:IsA("Model") then
+                                targetPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                            end
+                            
+                            if targetPart and targetPart:IsA("BasePart") then
+                                table.insert(categoryMap[category.category], {
+                                    name = locationInfo.name,
+                                    part = targetPart,
+                                    category = category.category,
+                                    originalName = obj.Name
+                                })
+                                found = true
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return categoryMap
+end
+
+-- State Global
+local state = {
+    selectedLocations = {},
+    isRunning = false,
+    teleportDelay = 1,
+    autoPrompt = true,
+    currentIndex = 1,
+    isMinimized = false,
+    loopContinue = true,
+}
+
+-- Auto detect lokasi saat script dimulai
+local LOCATIONS_MAP = autoDetectLocations()
+local TOTAL_LOCATIONS = 0
+for _, locs in pairs(LOCATIONS_MAP) do
+    TOTAL_LOCATIONS = TOTAL_LOCATIONS + #locs
+end
+
+print("✅ Lokasi terdeteksi: " .. TOTAL_LOCATIONS)
+
+-- Fungsi untuk mendapatkan player sendiri
+local function getPlayerKios()
+    local character = player.Character
+    if character then
+        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+        return humanoidRootPart
+    end
+    return nil
+end
+
+-- Fungsi untuk menemukan dan trigger ProximityPrompt
+local function triggerProximityPrompt()
+    local rootPart = getPlayerKios()
+    if not rootPart then return false end
+
+    for _, instance in ipairs(workspace:GetDescendants()) do
+        if instance:IsA("ProximityPrompt") then
+            local prompt = instance
+            local targetPart = prompt.Parent
+            
+            if targetPart and targetPart:IsA("BasePart") and rootPart and rootPart.Parent then
+                local distance = (targetPart.Position - rootPart.Position).Magnitude
+                if distance <= prompt.MaxActivationDistance then
+                    prompt:InputHoldBegin()
+                    task.wait(prompt.HoldDuration or 0.5)
+                    prompt:InputHoldEnd()
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Fungsi untuk teleport ke lokasi
+local function teleportToLocation(locationPart)
+    local playerRoot = getPlayerKios()
+    if not playerRoot then
+        warn("🚨 Kios player tidak ditemukan!")
+        return false
+    end
+
+    if locationPart and locationPart.Parent then
+        local targetPosition = locationPart.Position + Vector3.new(5, 3, 0)
+        playerRoot.CFrame = CFrame.new(targetPosition)
+        return true
+    end
+    
+    return false
+end
+
+-- Fungsi untuk menjalankan teleport otomatis LOOP
+local function startAutoTeleport(startButton)
+    if state.isRunning then return end
+    
+    state.isRunning = true
+    state.loopContinue = true
+
+    local character = player.Character or player.CharacterAdded:Wait()
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+    
+    local active = true
+    local characterRemovingConn = player.CharacterRemoving:Connect(function()
+        active = false
+        state.isRunning = false
+        characterRemovingConn:Disconnect()
+    end)
+
+    local connection
+    connection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not state.isRunning or not active or not state.loopContinue then
+            connection:Disconnect()
+            if characterRemovingConn.Connected then
+                characterRemovingConn:Disconnect()
+            end
+            if startButton then
+                startButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+                startButton.Text = "▶ START"
+            end
+            return
+        end
+
+        if #state.selectedLocations > 0 then
+            local location = state.selectedLocations[state.currentIndex]
+            
+            if location and location.part and location.part.Parent then
+                if teleportToLocation(location.part) then
+                    print("📍 Teleport ke: " .. location.name .. " (" .. location.category .. ")")
+                else
+                    print("❌ Gagal teleport ke: " .. location.name)
+                end
+                
+                task.wait(0.5)
+                
+                if state.autoPrompt then
+                    if triggerProximityPrompt() then
+                        print("✓ ProximityPrompt triggered di: " .. location.name)
+                    else
+                        print("⚠️ ProximityPrompt tidak ditemukan")
+                    end
+                end
+                
+                task.wait(state.teleportDelay)
+            end
+            
+            state.currentIndex = state.currentIndex + 1
+            
+            if state.currentIndex > #state.selectedLocations then
+                state.currentIndex = 1
+                print("🔄 Loop berulang...")
+            end
+        end
+    end)
+end
+
+-- Fungsi untuk menghentikan teleport
+local function stopAutoTeleport(startButton)
+    state.isRunning = false
+    state.loopContinue = false
+    if startButton then
+        startButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+        startButton.Text = "▶ START"
+    end
+    print("⏹️ Teleport dihentikan!")
+end
+
+-- Fungsi untuk toggle pilihan lokasi
+local function toggleLocation(location)
+    local found = false
+    for i, loc in ipairs(state.selectedLocations) do
+        if loc.name == location.name and loc.category == location.category then
+            table.remove(state.selectedLocations, i)
+            found = true
+            break
+        end
+    end
+    
+    if not found then
+        table.insert(state.selectedLocations, location)
+    end
+end
+
+-- ====================================
+-- MEMBUAT GUI (COMPACT)
+-- ====================================
+
+local function createGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "TeleportKiosGUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+
+    -- Main Frame
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.Size = UDim2.new(0, 340, 0, 540)
+    mainFrame.Position = UDim2.new(0, 10, 0, 100)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = screenGui
+
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.CornerRadius = UDim.new(0, 8)
+    uiCorner.Parent = mainFrame
+
+    -- Top Bar (DRAGGABLE)
+    local topBar = Instance.new("Frame")
+    topBar.Name = "TopBar"
+    topBar.Size = UDim2.new(1, 0, 0, 35)
+    topBar.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    topBar.BorderSizePixel = 0
+    topBar.Parent = mainFrame
+
+    local topBarCorner = Instance.new("UICorner")
+    topBarCorner.CornerRadius = UDim.new(0, 8)
+    topBarCorner.Parent = topBar
+
+    -- Draggable functionality
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+
+    topBar.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+        end
+    end)
+
+    topBar.InputEnded:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+
+    game:GetService("UserInputService").InputChanged:Connect(function(input, gameProcessed)
+        if dragging and dragStart then
+            local delta = input.Position - dragStart
+            mainFrame.Position = startPos + UDim2.new(0, delta.X, 0, delta.Y)
+        end
+    end)
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "Title"
+    titleLabel.Text = "🎯 TELEPORT KIOS"
+    titleLabel.Size = UDim2.new(0.6, 0, 1, 0)
+    titleLabel.Position = UDim2.new(0, 10, 0, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
+    titleLabel.TextSize = 12
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = topBar
+
+    local watermark = Instance.new("TextLabel")
+    watermark.Name = "Watermark"
+    watermark.Text = "SAPIGANTENG"
+    watermark.Size = UDim2.new(0.3, 0, 1, 0)
+    watermark.Position = UDim2.new(0.35, 0, 0, 0)
+    watermark.BackgroundTransparency = 1
+    watermark.TextColor3 = Color3.fromRGB(100, 200, 255)
+    watermark.TextSize = 8
+    watermark.Font = Enum.Font.Gotham
+    watermark.TextXAlignment = Enum.TextXAlignment.Center
+    watermark.Parent = topBar
+
+    -- Tombol Minimize
+    local minimizeButton = Instance.new("TextButton")
+    minimizeButton.Name = "MinimizeButton"
+    minimizeButton.Text = "−"
+    minimizeButton.Size = UDim2.new(0, 25, 1, 0)
+    minimizeButton.Position = UDim2.new(1, -55, 0, 0)
+    minimizeButton.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    minimizeButton.BorderSizePixel = 0
+    minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    minimizeButton.TextSize = 16
+    minimizeButton.Font = Enum.Font.GothamBold
+    minimizeButton.Parent = topBar
+
+    -- Tombol Close
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Text = "✕"
+    closeButton.Size = UDim2.new(0, 25, 1, 0)
+    closeButton.Position = UDim2.new(1, -25, 0, 0)
+    closeButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+    closeButton.BorderSizePixel = 0
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.TextSize = 14
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Parent = topBar
+
+    closeButton.MouseButton1Click:Connect(function()
+        if state.isRunning then
+            state.isRunning = false
+            state.loopContinue = false
+        end
+        screenGui:Destroy()
+        print("❌ GUI Ditutup!")
+    end)
+
+    -- Scroll Frame untuk Lokasi
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Name = "ScrollFrame"
+    scrollFrame.Size = UDim2.new(1, -10, 0, 260)
+    scrollFrame.Position = UDim2.new(0, 5, 0, 40)
+    scrollFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+    scrollFrame.BorderColor3 = Color3.fromRGB(70, 70, 75)
+    scrollFrame.BorderSizePixel = 1
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scrollFrame.Parent = mainFrame
+
+    local scrollCorner = Instance.new("UICorner")
+    scrollCorner.CornerRadius = UDim.new(0, 6)
+    scrollCorner.Parent = scrollFrame
+
+    -- UI Layout untuk ScrollFrame
+    local uiListLayout = Instance.new("UIListLayout")
+    uiListLayout.Padding = UDim.new(0, 2)
+    uiListLayout.Parent = scrollFrame
+
+    -- Buat tombol untuk setiap kategori dan lokasi
+    local totalHeight = 0
+    
+    for _, category in ipairs(LOCATION_CATEGORIES) do
+        local categoryLocs = LOCATIONS_MAP[category.category] or {}
+        
+        if #categoryLocs > 0 then
+            -- Header Kategori
+            local categoryHeader = Instance.new("TextLabel")
+            categoryHeader.Name = "CategoryHeader_" .. category.category
+            categoryHeader.Text = "📁 " .. category.category .. " (" .. #categoryLocs .. ")"
+            categoryHeader.Size = UDim2.new(1, -8, 0, 22)
+            categoryHeader.BackgroundColor3 = Color3.fromRGB(60, 80, 100)
+            categoryHeader.BorderColor3 = Color3.fromRGB(100, 150, 200)
+            categoryHeader.BorderSizePixel = 1
+            categoryHeader.TextColor3 = Color3.fromRGB(200, 220, 255)
+            categoryHeader.TextSize = 10
+            categoryHeader.Font = Enum.Font.GothamBold
+            categoryHeader.TextXAlignment = Enum.TextXAlignment.Left
+            categoryHeader.Parent = scrollFrame
+
+            local headerCorner = Instance.new("UICorner")
+            headerCorner.CornerRadius = UDim.new(0, 4)
+            headerCorner.Parent = categoryHeader
+
+            totalHeight = totalHeight + 25
+
+            -- Tombol untuk setiap lokasi dalam kategori
+            for _, location in ipairs(categoryLocs) do
+                local locationButton = Instance.new("TextButton")
+                locationButton.Name = location.name
+                locationButton.Text = "  ☐ " .. location.name
+                locationButton.Size = UDim2.new(1, -8, 0, 22)
+                locationButton.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+                locationButton.BorderColor3 = Color3.fromRGB(80, 80, 90)
+                locationButton.BorderSizePixel = 1
+                locationButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+                locationButton.TextSize = 10
+                locationButton.Font = Enum.Font.Gotham
+                locationButton.TextXAlignment = Enum.TextXAlignment.Left
+                locationButton.Parent = scrollFrame
+
+                local buttonCorner = Instance.new("UICorner")
+                buttonCorner.CornerRadius = UDim.new(0, 3)
+                buttonCorner.Parent = locationButton
+
+                local isSelected = false
+                locationButton.MouseButton1Click:Connect(function()
+                    toggleLocation(location)
+                    isSelected = not isSelected
+                    
+                    if isSelected then
+                        locationButton.Text = "  ☑ " .. location.name
+                        locationButton.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
+                    else
+                        locationButton.Text = "  ☐ " .. location.name
+                        locationButton.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+                    end
+                end)
+
+                totalHeight = totalHeight + 25
+            end
+        end
+    end
+
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(totalHeight, 260))
+
+    -- Control Panel
+    local controlPanel = Instance.new("Frame")
+    controlPanel.Name = "ControlPanel"
+    controlPanel.Size = UDim2.new(1, -10, 0, 170)
+    controlPanel.Position = UDim2.new(0, 5, 0, 310)
+    controlPanel.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+    controlPanel.BorderColor3 = Color3.fromRGB(70, 70, 75)
+    controlPanel.BorderSizePixel = 1
+    controlPanel.Parent = mainFrame
+
+    local panelCorner = Instance.new("UICorner")
+    panelCorner.CornerRadius = UDim.new(0, 6)
+    panelCorner.Parent = controlPanel
+
+    -- Label untuk Delay
+    local delayLabel = Instance.new("TextLabel")
+    delayLabel.Name = "DelayLabel"
+    delayLabel.Text = "Jeda (detik):"
+    delayLabel.Size = UDim2.new(0.5, 0, 0, 18)
+    delayLabel.Position = UDim2.new(0, 5, 0, 5)
+    delayLabel.BackgroundTransparency = 1
+    delayLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    delayLabel.TextSize = 10
+    delayLabel.Font = Enum.Font.Gotham
+    delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+    delayLabel.Parent = controlPanel
+
+    -- Textbox untuk Delay
+    local delayInput = Instance.new("TextBox")
+    delayInput.Name = "DelayInput"
+    delayInput.Text = tostring(state.teleportDelay)
+    delayInput.Size = UDim2.new(0.4, 0, 0, 20)
+    delayInput.Position = UDim2.new(0.55, 0, 0, 5)
+    delayInput.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    delayInput.BorderColor3 = Color3.fromRGB(100, 100, 110)
+    delayInput.BorderSizePixel = 1
+    delayInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    delayInput.TextSize = 10
+    delayInput.Font = Enum.Font.Gotham
+    delayInput.Parent = controlPanel
+
+    local delayInputCorner = Instance.new("UICorner")
+    delayInputCorner.CornerRadius = UDim.new(0, 3)
+    delayInputCorner.Parent = delayInput
+
+    delayInput.FocusLost:Connect(function()
+        local delay = tonumber(delayInput.Text)
+        if delay and delay > 0 then
+            state.teleportDelay = delay
+        else
+            delayInput.Text = tostring(state.teleportDelay)
+        end
+    end)
+
+    -- Toggle Auto Prompt
+    local promptToggleLabel = Instance.new("TextLabel")
+    promptToggleLabel.Name = "PromptToggleLabel"
+    promptToggleLabel.Text = "Auto Prompt:"
+    promptToggleLabel.Size = UDim2.new(0.5, 0, 0, 20)
+    promptToggleLabel.Position = UDim2.new(0, 5, 0, 30)
+    promptToggleLabel.BackgroundTransparency = 1
+    promptToggleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    promptToggleLabel.TextSize = 10
+    promptToggleLabel.Font = Enum.Font.Gotham
+    promptToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    promptToggleLabel.Parent = controlPanel
+
+    local promptToggleButton = Instance.new("TextButton")
+    promptToggleButton.Name = "PromptToggleButton"
+    promptToggleButton.Text = "✓"
+    promptToggleButton.Size = UDim2.new(0.35, 0, 0, 20)
+    promptToggleButton.Position = UDim2.new(0.6, 0, 0, 30)
+    promptToggleButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    promptToggleButton.BorderSizePixel = 0
+    promptToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    promptToggleButton.TextSize = 10
+    promptToggleButton.Font = Enum.Font.GothamBold
+    promptToggleButton.Parent = controlPanel
+
+    local promptToggleCorner = Instance.new("UICorner")
+    promptToggleCorner.CornerRadius = UDim.new(0, 3)
+    promptToggleCorner.Parent = promptToggleButton
+
+    promptToggleButton.MouseButton1Click:Connect(function()
+        state.autoPrompt = not state.autoPrompt
+        if state.autoPrompt then
+            promptToggleButton.Text = "✓"
+            promptToggleButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+        else
+            promptToggleButton.Text = "✗"
+            promptToggleButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+        end
+    end)
+
+    -- Tombol Start
+    local startButton = Instance.new("TextButton")
+    startButton.Name = "StartButton"
+    startButton.Text = "▶ START"
+    startButton.Size = UDim2.new(0.48, 0, 0, 28)
+    startButton.Position = UDim2.new(0, 5, 0, 58)
+    startButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    startButton.BorderSizePixel = 0
+    startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    startButton.TextSize = 11
+    startButton.Font = Enum.Font.GothamBold
+    startButton.Parent = controlPanel
+
+    local startCorner = Instance.new("UICorner")
+    startCorner.CornerRadius = UDim.new(0, 4)
+    startCorner.Parent = startButton
+
+    startButton.MouseButton1Click:Connect(function()
+        if #state.selectedLocations == 0 then
+            print("⚠️ Pilih minimal 1 lokasi!")
+            return
+        end
+        startAutoTeleport(startButton)
+        startButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        startButton.Text = "⏸ RUN"
+    end)
+
+    -- Tombol Stop
+    local stopButton = Instance.new("TextButton")
+    stopButton.Name = "StopButton"
+    stopButton.Text = "⏹ STOP"
+    stopButton.Size = UDim2.new(0.48, 0, 0, 28)
+    stopButton.Position = UDim2.new(0.52, 0, 0, 58)
+    stopButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+    stopButton.BorderSizePixel = 0
+    stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    stopButton.TextSize = 11
+    stopButton.Font = Enum.Font.GothamBold
+    stopButton.Parent = controlPanel
+
+    local stopCorner = Instance.new("UICorner")
+    stopCorner.CornerRadius = UDim.new(0, 4)
+    stopCorner.Parent = stopButton
+
+    stopButton.MouseButton1Click:Connect(function()
+        stopAutoTeleport(startButton)
+    end)
+
+    -- Info Label
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Name = "InfoLabel"
+    infoLabel.Text = "📍 Total: " .. TOTAL_LOCATIONS .. " lokasi\n🚀 Pilih > START > Loop Teleport"
+    infoLabel.Size = UDim2.new(1, -10, 0, 35)
+    infoLabel.Position = UDim2.new(0, 5, 0, 92)
+    infoLabel.BackgroundColor3 = Color3.fromRGB(30, 50, 80)
+    infoLabel.BorderColor3 = Color3.fromRGB(100, 150, 200)
+    infoLabel.BorderSizePixel = 1
+    infoLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    infoLabel.TextSize = 9
+    infoLabel.Font = Enum.Font.Gotham
+    infoLabel.TextWrapped = true
+    infoLabel.Parent = controlPanel
+
+    local infoCorner = Instance.new("UICorner")
+    infoCorner.CornerRadius = UDim.new(0, 3)
+    infoCorner.Parent = infoLabel
+
+    -- Minimize Frame
+    local minimizedFrame = Instance.new("Frame")
+    minimizedFrame.Name = "MinimizedFrame"
+    minimizedFrame.Size = UDim2.new(0, 160, 0, 35)
+    minimizedFrame.Position = UDim2.new(0, 10, 0, 100)
+    minimizedFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    minimizedFrame.BorderColor3 = Color3.fromRGB(100, 150, 200)
+    minimizedFrame.BorderSizePixel = 2
+    minimizedFrame.Visible = false
+    minimizedFrame.Parent = screenGui
+
+    local minimizedCorner = Instance.new("UICorner")
+    minimizedCorner.CornerRadius = UDim.new(0, 6)
+    minimizedCorner.Parent = minimizedFrame
+
+    local minimizedLabel = Instance.new("TextLabel")
+    minimizedLabel.Name = "MinimizedLabel"
+    minimizedLabel.Text = "🎯 Teleport"
+    minimizedLabel.Size = UDim2.new(1, -35, 1, 0)
+    minimizedLabel.Position = UDim2.new(0, 5, 0, 0)
+    minimizedLabel.BackgroundTransparency = 1
+    minimizedLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
+    minimizedLabel.TextSize = 11
+    minimizedLabel.Font = Enum.Font.GothamBold
+    minimizedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    minimizedLabel.Parent = minimizedFrame
+
+    local restoreButton = Instance.new("TextButton")
+    restoreButton.Name = "RestoreButton"
+    restoreButton.Text = "□"
+    restoreButton.Size = UDim2.new(0, 32, 1, 0)
+    restoreButton.Position = UDim2.new(1, -32, 0, 0)
+    restoreButton.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
+    restoreButton.BorderSizePixel = 0
+    restoreButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    restoreButton.TextSize = 14
+    restoreButton.Font = Enum.Font.GothamBold
+    restoreButton.Parent = minimizedFrame
+
+    local restoreCorner = Instance.new("UICorner")
+    restoreCorner.CornerRadius = UDim.new(0, 4)
+    restoreCorner.Parent = restoreButton
+
+    -- Fungsi Minimize/Restore
+    minimizeButton.MouseButton1Click:Connect(function()
+        state.isMinimized = not state.isMinimized
+        mainFrame.Visible = not state.isMinimized
+        minimizedFrame.Visible = state.isMinimized
+    end)
+
+    restoreButton.MouseButton1Click:Connect(function()
+        state.isMinimized = false
+        mainFrame.Visible = true
+        minimizedFrame.Visible = false
+    end)
+
+    return screenGui
+end
+
+-- Inisialisasi GUI
+print("✅ Script Teleport Kios Dimulai!")
+print("📍 Lokasi terdeteksi: " .. TOTAL_LOCATIONS)
+print("\n📁 DAFTAR LOKASI:")
+for category, locs in pairs(LOCATIONS_MAP) do
+    print("  " .. category .. " (" .. #locs .. " lokasi)")
+    for _, loc in ipairs(locs) do
+        print("    ✓ " .. loc.name .. " [" .. loc.originalName .. "]")
+    end
+end
+print("\n")
+
+createGUI()
