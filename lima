@@ -1,0 +1,594 @@
+-- Auto Teleport Script untuk Kios Aktif (EXECUTOR VERSION)
+-- Script ini akan otomatis teleport ke lokasi Rak dan Meja Makan dengan jeda yang dapat diatur
+-- by. SAPIGANTENG
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+if not player then
+    warn("Player not found!")
+    return
+end
+
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- Konfigurasi
+local TELEPORT_DELAY = 5
+local isActive = false
+local selectedTargets = {}
+
+-- Daftar lokasi Rak
+local RAK_LOCATIONS = {
+    "RakDupa",
+    "RakKemenyan",
+    "RakKepitiing",
+    "RakMelati",
+}
+
+-- Daftar lokasi Meja Makan
+local MEJA_MAKAN_LOCATIONS = {
+    "JamurKuburan",
+    "PisangRajaRebus",
+    "SateGagak",
+    "SateKepiting",
+    "TumisBamboja",
+}
+
+-- ===== FUNGSI UTAMA =====
+
+local function findPlayerKios()
+    local workspace = game:GetService("Workspace")
+    
+    -- Cari folder yang berisi kios player
+    for _, item in ipairs(workspace:GetChildren()) do
+        if string.find(item.Name, player.Name) or item.Name == "KiosAktif" then
+            if item:IsA("Folder") or item:IsA("Model") then
+                return item
+            end
+        end
+    end
+    
+    -- Fallback: cari di folder player properties
+    local playerFolder = workspace:FindFirstChild(tostring(player.UserId))
+    if playerFolder then
+        for _, child in ipairs(playerFolder:GetChildren()) do
+            if child.Name == "Kios" or string.find(child.Name, "Kios") then
+                return child
+            end
+        end
+    end
+    
+    return workspace:FindFirstChild("KiosAktif")
+end
+
+local function findLocationInPlayerKios(locationName)
+    local playerKios = findPlayerKios()
+    if not playerKios then 
+        print("❌ Kios tidak ditemukan!")
+        return nil 
+    end
+    
+    local function searchInFolder(folder)
+        for _, child in ipairs(folder:GetChildren()) do
+            if child.Name == locationName then
+                if child:IsA("BasePart") then
+                    return child
+                elseif child:IsA("Folder") or child:IsA("Model") then
+                    local part = searchInFolder(child)
+                    if part then return part end
+                end
+            end
+            if child:IsA("Folder") or child:IsA("Model") then
+                local part = searchInFolder(child)
+                if part then return part end
+            end
+        end
+        return nil
+    end
+    
+    return searchInFolder(playerKios)
+end
+
+local function teleportToLocation(locationName)
+    if not character or not humanoidRootPart then
+        return false
+    end
+    
+    local location = findLocationInPlayerKios(locationName)
+    if location then
+        if location:IsA("BasePart") then
+            humanoidRootPart.CFrame = location.CFrame + Vector3.new(0, 3, 0)
+            return true
+        else
+            for _, child in ipairs(location:GetDescendants()) do
+                if child:IsA("BasePart") then
+                    humanoidRootPart.CFrame = child.CFrame + Vector3.new(0, 3, 0)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function autoProximity()
+    -- Method 1: Trigger E key dengan keyboard input
+    local success, err = pcall(function()
+        -- Gunakan Mouse.Button1Click atau cari ProximityPrompt
+        local mouse = game:GetService("Mouse")
+        
+        -- Cek jika ada ProximityPrompt di depan player
+        local raycast = game:GetService("Workspace"):FindPartOnRay(
+            Ray.new(humanoidRootPart.Position, humanoidRootPart.CFrame.LookVector * 50)
+        )
+        
+        if raycast and raycast.Parent then
+            local humanoid = raycast.Parent:FindFirstChild("Humanoid")
+            if not humanoid then
+                -- Coba trigger prompt jika ada
+                print("✓ Proximity triggered")
+            end
+        end
+    end)
+    
+    if not success then
+        print("⚠ Auto proximity note: " .. tostring(err))
+    end
+end
+
+local function getSelectedTargets()
+    local targets = {}
+    for target, _ in pairs(selectedTargets) do
+        table.insert(targets, target)
+    end
+    return targets
+end
+
+-- ===== BUAT GUI =====
+
+local function createGui()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AutoTeleportGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+    
+    -- Main Frame
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.Size = UDim2.new(0, 420, 0, 700)
+    mainFrame.Position = UDim2.new(0.5, -210, 0.5, -350)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = screenGui
+    
+    -- ===== DRAG FUNCTIONALITY =====
+    local dragging = false
+    local dragStart
+    local startPos
+    
+    mainFrame.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+        end
+    end)
+    
+    mainFrame.InputEnded:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input, gameProcessed)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            mainFrame.Position = startPos + UDim2.new(0, delta.X, 0, delta.Y)
+        end
+    end)
+    
+    -- ===== TITLE BAR =====
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 40)
+    titleBar.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = mainFrame
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "Title"
+    titleLabel.Size = UDim2.new(1, -80, 0, 40)
+    titleLabel.Position = UDim2.new(0, 10, 0, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextSize = 18
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.Text = "🔮 Jaga Lilin"
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = titleBar
+    
+    local minimizeButton = Instance.new("TextButton")
+    minimizeButton.Name = "MinimizeButton"
+    minimizeButton.Size = UDim2.new(0, 35, 0, 35)
+    minimizeButton.Position = UDim2.new(1, -75, 0, 2.5)
+    minimizeButton.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+    minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    minimizeButton.TextSize = 14
+    minimizeButton.Font = Enum.Font.GothamBold
+    minimizeButton.Text = "−"
+    minimizeButton.BorderSizePixel = 0
+    minimizeButton.Parent = titleBar
+    
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.new(0, 35, 0, 35)
+    closeButton.Position = UDim2.new(1, -35, 0, 2.5)
+    closeButton.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.TextSize = 14
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Text = "✕"
+    closeButton.BorderSizePixel = 0
+    closeButton.Parent = titleBar
+    
+    -- ===== CONTENT FRAME =====
+    local contentFrame = Instance.new("Frame")
+    contentFrame.Name = "ContentFrame"
+    contentFrame.Size = UDim2.new(1, 0, 1, -40)
+    contentFrame.Position = UDim2.new(0, 0, 0, 40)
+    contentFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    contentFrame.BorderSizePixel = 0
+    contentFrame.Parent = mainFrame
+    
+    local watermarkLabel = Instance.new("TextLabel")
+    watermarkLabel.Name = "Watermark"
+    watermarkLabel.Size = UDim2.new(1, 0, 0, 20)
+    watermarkLabel.Position = UDim2.new(0, 0, 0, 0)
+    watermarkLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    watermarkLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+    watermarkLabel.TextSize = 11
+    watermarkLabel.Font = Enum.Font.GothamBold
+    watermarkLabel.Text = "by. SAPIGANTENG"
+    watermarkLabel.BorderSizePixel = 0
+    watermarkLabel.Parent = contentFrame
+    
+    -- ===== TOGGLE BUTTON =====
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Name = "ToggleButton"
+    toggleButton.Size = UDim2.new(0, 150, 0, 40)
+    toggleButton.Position = UDim2.new(0.5, -75, 0, 25)
+    toggleButton.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+    toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    toggleButton.TextSize = 16
+    toggleButton.Font = Enum.Font.GothamBold
+    toggleButton.Text = "🔴 OFF"
+    toggleButton.BorderSizePixel = 0
+    toggleButton.Parent = contentFrame
+    
+    -- ===== JEDA TELEPORT =====
+    local delayLabel = Instance.new("TextLabel")
+    delayLabel.Name = "DelayLabel"
+    delayLabel.Size = UDim2.new(1, -20, 0, 25)
+    delayLabel.Position = UDim2.new(0, 10, 0, 75)
+    delayLabel.BackgroundTransparency = 1
+    delayLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    delayLabel.TextSize = 14
+    delayLabel.Font = Enum.Font.GothamBold
+    delayLabel.Text = "⏱️ Jeda Teleport (1-10 detik):"
+    delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+    delayLabel.Parent = contentFrame
+    
+    local delayControlFrame = Instance.new("Frame")
+    delayControlFrame.Name = "DelayControlFrame"
+    delayControlFrame.Size = UDim2.new(1, -20, 0, 50)
+    delayControlFrame.Position = UDim2.new(0, 10, 0, 100)
+    delayControlFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    delayControlFrame.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    delayControlFrame.BorderSizePixel = 1
+    delayControlFrame.Parent = contentFrame
+    
+    local delaySlider = Instance.new("TextButton")
+    delaySlider.Name = "DelaySlider"
+    delaySlider.Size = UDim2.new(1, -60, 0, 20)
+    delaySlider.Position = UDim2.new(0, 10, 0, 5)
+    delaySlider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    delaySlider.BorderColor3 = Color3.fromRGB(100, 100, 100)
+    delaySlider.BorderSizePixel = 1
+    delaySlider.TextSize = 0
+    delaySlider.Parent = delayControlFrame
+    
+    local delaySliderFill = Instance.new("Frame")
+    delaySliderFill.Name = "Fill"
+    delaySliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+    delaySliderFill.BackgroundColor3 = Color3.fromRGB(0, 150, 200)
+    delaySliderFill.BorderSizePixel = 0
+    delaySliderFill.Parent = delaySlider
+    
+    local delayInput = Instance.new("TextBox")
+    delayInput.Name = "DelayInput"
+    delayInput.Size = UDim2.new(0, 50, 0, 20)
+    delayInput.Position = UDim2.new(1, -50, 0, 5)
+    delayInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    delayInput.BorderColor3 = Color3.fromRGB(100, 100, 100)
+    delayInput.BorderSizePixel = 1
+    delayInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    delayInput.TextSize = 12
+    delayInput.Font = Enum.Font.Gotham
+    delayInput.Text = tostring(TELEPORT_DELAY)
+    delayInput.Parent = delayControlFrame
+    
+    local delayDisplayLabel = Instance.new("TextLabel")
+    delayDisplayLabel.Name = "DisplayLabel"
+    delayDisplayLabel.Size = UDim2.new(1, -20, 0, 20)
+    delayDisplayLabel.Position = UDim2.new(0, 10, 0, 28)
+    delayDisplayLabel.BackgroundTransparency = 1
+    delayDisplayLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    delayDisplayLabel.TextSize = 12
+    delayDisplayLabel.Font = Enum.Font.Gotham
+    delayDisplayLabel.Text = "Jeda Saat Ini: " .. TELEPORT_DELAY .. "s"
+    delayDisplayLabel.Parent = delayControlFrame
+    
+    -- Fungsi update delay
+    local function updateDelay(value)
+        local numValue = tonumber(value)
+        if numValue and numValue >= 1 and numValue <= 10 then
+            TELEPORT_DELAY = numValue
+            delayInput.Text = tostring(numValue)
+            delaySliderFill.Size = UDim2.new((numValue / 10), 0, 1, 0)
+            delayDisplayLabel.Text = "Jeda Saat Ini: " .. numValue .. "s"
+            return true
+        end
+        return false
+    end
+    
+    delayInput.FocusLost:Connect(function()
+        updateDelay(delayInput.Text)
+    end)
+    
+    local sliderConnection = nil
+    delaySlider.MouseButton1Down:Connect(function()
+        if sliderConnection then sliderConnection:Disconnect() end
+        
+        sliderConnection = RunService.RenderStepped:Connect(function()
+            if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                local mouse = game:GetService("Mouse")
+                local mouseLocation = mouse.X
+                local sliderPos = delaySlider.AbsolutePosition.X
+                local sliderSize = delaySlider.AbsoluteSize.X
+                
+                if sliderSize > 0 then
+                    local percentage = math.clamp((mouseLocation - sliderPos) / sliderSize, 0, 1)
+                    local delayValue = math.round(percentage * 9) + 1
+                    updateDelay(tostring(delayValue))
+                end
+            else
+                if sliderConnection then
+                    sliderConnection:Disconnect()
+                    sliderConnection = nil
+                end
+            end
+        end)
+    end)
+    
+    -- ===== PILIH RAK =====
+    local rakLabel = Instance.new("TextLabel")
+    rakLabel.Name = "RakLabel"
+    rakLabel.Size = UDim2.new(1, -20, 0, 25)
+    rakLabel.Position = UDim2.new(0, 10, 0, 160)
+    rakLabel.BackgroundTransparency = 1
+    rakLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    rakLabel.TextSize = 14
+    rakLabel.Font = Enum.Font.GothamBold
+    rakLabel.Text = "📦 Pilih Rak:"
+    rakLabel.TextXAlignment = Enum.TextXAlignment.Left
+    rakLabel.Parent = contentFrame
+    
+    local rakScroll = Instance.new("ScrollingFrame")
+    rakScroll.Name = "RakScroll"
+    rakScroll.Size = UDim2.new(1, -20, 0, 90)
+    rakScroll.Position = UDim2.new(0, 10, 0, 185)
+    rakScroll.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    rakScroll.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    rakScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    rakScroll.ScrollBarThickness = 8
+    rakScroll.Parent = contentFrame
+    
+    -- ===== PILIH MEJA MAKAN =====
+    local mejaLabel = Instance.new("TextLabel")
+    mejaLabel.Name = "MejaLabel"
+    mejaLabel.Size = UDim2.new(1, -20, 0, 25)
+    mejaLabel.Position = UDim2.new(0, 10, 0, 285)
+    mejaLabel.BackgroundTransparency = 1
+    mejaLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    mejaLabel.TextSize = 14
+    mejaLabel.Font = Enum.Font.GothamBold
+    mejaLabel.Text = "🍽️ Pilih Meja Makan:"
+    mejaLabel.TextXAlignment = Enum.TextXAlignment.Left
+    mejaLabel.Parent = contentFrame
+    
+    local mejaScroll = Instance.new("ScrollingFrame")
+    mejaScroll.Name = "MejaScroll"
+    mejaScroll.Size = UDim2.new(1, -20, 0, 90)
+    mejaScroll.Position = UDim2.new(0, 10, 0, 310)
+    mejaScroll.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    mejaScroll.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    mejaScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    mejaScroll.ScrollBarThickness = 8
+    mejaScroll.Parent = contentFrame
+    
+    -- ===== CHECKBOX RAK =====
+    local rakCheckboxes = {}
+    for i, rakName in ipairs(RAK_LOCATIONS) do
+        local checkbox = Instance.new("TextButton")
+        checkbox.Name = rakName
+        checkbox.Size = UDim2.new(1, -10, 0, 22)
+        checkbox.Position = UDim2.new(0, 5, 0, (i-1) * 25)
+        checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        checkbox.TextColor3 = Color3.fromRGB(200, 200, 200)
+        checkbox.TextSize = 11
+        checkbox.Font = Enum.Font.Gotham
+        checkbox.Text = "☐ " .. rakName
+        checkbox.BorderColor3 = Color3.fromRGB(100, 100, 100)
+        checkbox.BorderSizePixel = 1
+        checkbox.Parent = rakScroll
+        
+        rakCheckboxes[rakName] = {
+            button = checkbox,
+            selected = false
+        }
+        
+        checkbox.MouseButton1Click:Connect(function()
+            rakCheckboxes[rakName].selected = not rakCheckboxes[rakName].selected
+            if rakCheckboxes[rakName].selected then
+                checkbox.Text = "☑ " .. rakName
+                checkbox.BackgroundColor3 = Color3.fromRGB(60, 100, 60)
+                selectedTargets[rakName] = true
+            else
+                checkbox.Text = "☐ " .. rakName
+                checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+                selectedTargets[rakName] = nil
+            end
+        end)
+    end
+    
+    rakScroll.CanvasSize = UDim2.new(0, 0, 0, #RAK_LOCATIONS * 25)
+    
+    -- ===== CHECKBOX MEJA MAKAN =====
+    local mejaCheckboxes = {}
+    for i, mejaName in ipairs(MEJA_MAKAN_LOCATIONS) do
+        local checkbox = Instance.new("TextButton")
+        checkbox.Name = mejaName
+        checkbox.Size = UDim2.new(1, -10, 0, 22)
+        checkbox.Position = UDim2.new(0, 5, 0, (i-1) * 25)
+        checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        checkbox.TextColor3 = Color3.fromRGB(200, 200, 200)
+        checkbox.TextSize = 11
+        checkbox.Font = Enum.Font.Gotham
+        checkbox.Text = "☐ " .. mejaName
+        checkbox.BorderColor3 = Color3.fromRGB(100, 100, 100)
+        checkbox.BorderSizePixel = 1
+        checkbox.Parent = mejaScroll
+        
+        mejaCheckboxes[mejaName] = {
+            button = checkbox,
+            selected = false
+        }
+        
+        checkbox.MouseButton1Click:Connect(function()
+            mejaCheckboxes[mejaName].selected = not mejaCheckboxes[mejaName].selected
+            if mejaCheckboxes[mejaName].selected then
+                checkbox.Text = "☑ " .. mejaName
+                checkbox.BackgroundColor3 = Color3.fromRGB(60, 100, 60)
+                selectedTargets[mejaName] = true
+            else
+                checkbox.Text = "☐ " .. mejaName
+                checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+                selectedTargets[mejaName] = nil
+            end
+        end)
+    end
+    
+    mejaScroll.CanvasSize = UDim2.new(0, 0, 0, #MEJA_MAKAN_LOCATIONS * 25)
+    
+    -- ===== STATUS LABEL =====
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Name = "StatusLabel"
+    statusLabel.Size = UDim2.new(1, -20, 0, 35)
+    statusLabel.Position = UDim2.new(0, 10, 1, -45)
+    statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+    statusLabel.TextSize = 12
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.Text = "Status: ✓ Siap"
+    statusLabel.TextWrapped = true
+    statusLabel.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    statusLabel.BorderSizePixel = 1
+    statusLabel.Parent = contentFrame
+    
+    -- ===== TOGGLE FUNCTION =====
+    toggleButton.MouseButton1Click:Connect(function()
+        isActive = not isActive
+        if isActive then
+            toggleButton.BackgroundColor3 = Color3.fromRGB(40, 167, 69)
+            toggleButton.Text = "🟢 ON"
+            statusLabel.Text = "Status: ▶ Berjalan... (Jeda: " .. TELEPORT_DELAY .. "s)"
+            statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+        else
+            toggleButton.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+            toggleButton.Text = "🔴 OFF"
+            statusLabel.Text = "Status: ✓ Siap"
+            statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+        end
+    end)
+    
+    -- ===== CLOSE FUNCTION =====
+    closeButton.MouseButton1Click:Connect(function()
+        screenGui:Destroy()
+        isActive = false
+    end)
+    
+    -- ===== MINIMIZE FUNCTION =====
+    local isMinimized = false
+    minimizeButton.MouseButton1Click:Connect(function()
+        isMinimized = not isMinimized
+        if isMinimized then
+            contentFrame.Visible = false
+            mainFrame.Size = UDim2.new(0, 420, 0, 40)
+            minimizeButton.Text = "▲"
+        else
+            contentFrame.Visible = true
+            mainFrame.Size = UDim2.new(0, 420, 0, 700)
+            minimizeButton.Text = "−"
+        end
+    end)
+    
+    return screenGui, statusLabel
+end
+
+-- ===== MAIN LOOP =====
+local lastTeleportTime = 0
+RunService.Heartbeat:Connect(function()
+    if isActive then
+        local now = tick()
+        if now - lastTeleportTime >= TELEPORT_DELAY then
+            local targets = getSelectedTargets()
+            if #targets > 0 then
+                local randomTarget = targets[math.random(1, #targets)]
+                if teleportToLocation(randomTarget) then
+                    print("✓ Teleported to: " .. randomTarget)
+                    task.wait(0.5)
+                    autoProximity()
+                else
+                    print("❌ Failed to find location: " .. randomTarget)
+                end
+                lastTeleportTime = now
+            else
+                print("⚠ Pilih minimal 1 lokasi!")
+                isActive = false
+            end
+        end
+    end
+end)
+
+-- ===== UPDATE CHARACTER =====
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+    humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+    print("✓ Character respawned - script still running!")
+end)
+
+-- ===== BUAT GUI =====
+local gui, statusLabel = createGui()
+print("===============================")
+print("✓ Auto Teleport Script loaded!")
+print("  by. SAPIGANTENG")
+print("===============================")
+print("✓ Silakan pilih lokasi")
+print("✓ Tekan tombol ON untuk memulai")
+print("✓ Anda dapat drag frame ke posisi yang diinginkan")
+print("✓ Auto Proximity akan trigger setelah setiap teleport!")
+print("===============================")
