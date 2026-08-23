@@ -1,0 +1,812 @@
+--[[
+	AUTO TELEPORT GUI SCRIPT v2.0
+	Fitur:
+	- GUI custom yang dapat dipindahkan, diminimalkan, dan ditutup
+	- Teleport ke berbagai lokasi dengan Humanoid:MoveTo() (pergerakan natural)
+	- Jeda 5 detik antar teleport
+	- Auto ProximityPrompt setelah tiba
+	- Pilih teleport semua atau satu lokasi
+	- Hanya teleport ke Kios Aktif milik sendiri
+	- Status real-time
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- KONFIGURASI TUJUAN TELEPORT
+local TELEPORT_DESTINATIONS = {
+	mejaMakan = {
+		{name = "JamurRebus"},
+		{name = "PisangRajaRebus"},
+		{name = "SateGagak"},
+		{name = "SateKepiting"},
+		{name = "TumisKamboja"}
+	},
+	rak = {
+		{name = "RakDupa"},
+		{name = "RakKemenyan"},
+		{name = "RakKepiting"},
+		{name = "RakMelati"}
+	},
+	alatMasak = {
+		{name = "Pemotongan"}
+	}
+}
+
+-- STATE VARIABLE
+local guiState = {
+	isOpen = true,
+	isTeleporting = false,
+	selectedCategory = "mejaMakan",
+	selectedDestination = 1,
+	teleportMode = "all", -- "all" atau "single"
+	teleportDelay = 5,
+	proximityHoldTime = 1,
+	currentStatus = "SIAP"
+}
+
+-- ==================== FUNGSI UTILITY ====================
+
+-- Fungsi untuk menemukan Kios Aktif milik player sendiri
+local function findPlayerKiosAktif()
+	local playerName = player.Name
+	
+	for _, model in ipairs(workspace:FindPartBoundsInRadius(Vector3.new(0, 0, 0), math.huge):GetChildren()) do
+		if model:IsA("Model") and model.Name == "KiosAktif" then
+			-- Cek owner property
+			local ownerValue = model:FindFirstChild("Owner")
+			if ownerValue and ownerValue:IsA("StringValue") then
+				if ownerValue.Value == playerName then
+					print("✓ Ditemukan Kios Aktif milik: " .. playerName)
+					return model
+				end
+			elseif ownerValue and ownerValue:IsA("ObjectValue") then
+				if ownerValue.Value and ownerValue.Value.Name == playerName then
+					return model
+				end
+			end
+		end
+	end
+	
+	-- Fallback: cari Kios Aktif pertama
+	for _, model in ipairs(workspace:GetDescendants()) do
+		if model:IsA("Model") and model.Name == "KiosAktif" then
+			local ownerValue = model:FindFirstChild("Owner")
+			if not ownerValue then
+				print("⚠ Menggunakan Kios Aktif tanpa Owner property")
+				return model
+			end
+		end
+	end
+	
+	return nil
+end
+
+-- Fungsi untuk mendapatkan Part dari folder Kios Aktif
+local function getDestinationPart(category, locationName)
+	local kios = findPlayerKiosAktif()
+	if not kios then
+		warn("❌ Kios Aktif tidak ditemukan!")
+		return nil
+	end
+	
+	local categoryFolder = kios:FindFirstChild(category)
+	if not categoryFolder then
+		warn("❌ Kategori '" .. category .. "' tidak ditemukan!")
+		return nil
+	end
+	
+	local part = categoryFolder:FindFirstChild(locationName)
+	if not part or not part:IsA("BasePart") then
+		warn("❌ Lokasi '" .. locationName .. "' tidak ditemukan atau bukan Part!")
+		return nil
+	end
+	
+	return part
+end
+
+-- Fungsi untuk teleport menggunakan Humanoid:MoveTo()
+local function moveToLocation(targetPart)
+	if not targetPart or not targetPart.Parent then
+		warn("❌ Part target tidak ditemukan!")
+		return false
+	end
+	
+	local character = player.Character
+	if not character then return false end
+	
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChild("Humanoid")
+	
+	if not humanoidRootPart or not humanoid then return false end
+	
+	-- Gunakan MoveTo untuk pergerakan natural
+	local targetPosition = targetPart.Position + targetPart.CFrame.LookVector * 5
+	humanoid:MoveTo(targetPosition)
+	
+	-- Tunggu hingga tiba di lokasi atau timeout 20 detik
+	local moveStartTime = tick()
+	while (humanoidRootPart.Position - targetPosition).Magnitude > 5 do
+		if tick() - moveStartTime > 20 then
+			warn("⏱ Timeout: Tidak bisa mencapai lokasi")
+			return false
+		end
+		task.wait(0.1)
+	end
+	
+	return true
+end
+
+-- Fungsi untuk mengaktifkan ProximityPrompt
+local function activateProximityPrompt()
+	local character = player.Character
+	if not character then return false end
+	
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart or not humanoidRootPart.Parent then return false end
+	
+	-- Cari ProximityPrompt di sekitar pemain
+	for _, instance in ipairs(workspace:GetDescendants()) do
+		if instance:IsA("ProximityPrompt") then
+			local prompt = instance
+			local targetPart = prompt.Parent
+			
+			if targetPart and targetPart:IsA("BasePart") then
+				local distance = (targetPart.Position - humanoidRootPart.Position).Magnitude
+				if distance <= prompt.MaxActivationDistance then
+					print("✓ Mengaktifkan ProximityPrompt: " .. targetPart.Name)
+					prompt:InputHoldBegin()
+					task.wait(guiState.proximityHoldTime)
+					prompt:InputHoldEnd()
+					return true
+				end
+			end
+		end
+	end
+	
+	return false
+end
+
+-- Fungsi untuk mendapatkan semua destinasi
+local function getAllDestinations()
+	local all = {}
+	for category, destinations in pairs(TELEPORT_DESTINATIONS) do
+		for _, dest in ipairs(destinations) do
+			table.insert(all, {category = category, name = dest.name})
+		end
+	end
+	return all
+end
+
+-- Fungsi untuk update status label
+local function updateStatus(message)
+	guiState.currentStatus = message
+	print("📊 " .. message)
+end
+
+-- ==================== LOGIKA TELEPORT ====================
+
+local function startTeleporting()
+	if guiState.isTeleporting then return end
+	guiState.isTeleporting = true
+	
+	local destinations
+	if guiState.teleportMode == "all" then
+		destinations = getAllDestinations()
+	else
+		destinations = TELEPORT_DESTINATIONS[guiState.selectedCategory]
+		if not destinations then return end
+		destinations = {destinations[guiState.selectedDestination]}
+	end
+	
+	task.spawn(function()
+		for i, dest in ipairs(destinations) do
+			if not guiState.isTeleporting then break end
+			
+			updateStatus("⏳ Menunggu jeda: " .. guiState.teleportDelay .. "s")
+			task.wait(guiState.teleportDelay)
+			
+			if not guiState.isTeleporting then break end
+			
+			updateStatus("🚀 Teleporting ke: " .. dest.name)
+			
+			-- Dapatkan destination part
+			local targetPart = getDestinationPart(dest.category, dest.name)
+			if not targetPart then
+				updateStatus("❌ Gagal: " .. dest.name .. " tidak ditemukan")
+				continue
+			end
+			
+			-- Teleport menggunakan MoveTo
+			local success = moveToLocation(targetPart)
+			if success then
+				updateStatus("✓ Tiba di: " .. dest.name)
+				task.wait(1)
+				
+				-- Aktifkan ProximityPrompt
+				updateStatus("🔘 Mengaktifkan ProximityPrompt...")
+				activateProximityPrompt()
+				task.wait(0.5)
+			else
+				updateStatus("❌ Gagal mencapai: " .. dest.name)
+			end
+		end
+		
+		guiState.isTeleporting = false
+		updateStatus("✅ Selesai!")
+	end)
+end
+
+local function stopTeleporting()
+	guiState.isTeleporting = false
+	updateStatus("⏹ Dihentikan")
+end
+
+-- ==================== SETUP GUI ====================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoTeleportGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- MAIN FRAME (DRAGGABLE)
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 380, 0, 550)
+mainFrame.Position = UDim2.new(0.5, -190, 0.5, -275)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = mainFrame
+
+-- SHADOW EFFECT
+local shadow = Instance.new("TextLabel")
+shadow.Name = "Shadow"
+shadow.Size = UDim2.new(1, 20, 1, 20)
+shadow.Position = UDim2.new(0, -10, 0, -10)
+shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+shadow.TextTransparency = 1
+shadow.BackgroundTransparency = 0.3
+shadow.Parent = mainFrame
+shadow.ZIndex = -1
+
+local shadowCorner = Instance.new("UICorner")
+shadowCorner.CornerRadius = UDim.new(0, 12)
+shadowCorner.Parent = shadow
+
+-- TITLE BAR
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 45)
+titleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 12)
+titleCorner.Parent = titleBar
+
+-- Gradient Title (simulate)
+local titleGradient = Instance.new("UIGradient")
+titleGradient.Color = ColorSequence.new(Color3.fromRGB(100, 150, 255), Color3.fromRGB(50, 100, 200))
+titleGradient.Rotation = 90
+titleGradient.Parent = titleBar
+
+-- TITLE TEXT
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "TitleLabel"
+titleLabel.Size = UDim2.new(1, -90, 1, 0)
+titleLabel.Position = UDim2.new(0, 15, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 16
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "⚡ AUTO TELEPORT v2.0"
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = titleBar
+
+-- MINIMIZE BUTTON
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 35, 0, 35)
+minimizeBtn.Position = UDim2.new(1, -80, 0, 5)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 100, 200)
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.TextSize = 18
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.Text = "—"
+minimizeBtn.Parent = titleBar
+
+local minimizeBtnCorner = Instance.new("UICorner")
+minimizeBtnCorner.CornerRadius = UDim.new(0, 6)
+minimizeBtnCorner.Parent = minimizeBtn
+
+-- CLOSE BUTTON
+local closeBtn = Instance.new("TextButton")
+closeBtn.Name = "CloseBtn"
+closeBtn.Size = UDim2.new(0, 35, 0, 35)
+closeBtn.Position = UDim2.new(1, -40, 0, 5)
+closeBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 18
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "✕"
+closeBtn.Parent = titleBar
+
+local closeBtnCorner = Instance.new("UICorner")
+closeBtnCorner.CornerRadius = UDim.new(0, 6)
+closeBtnCorner.Parent = closeBtn
+
+-- CONTENT FRAME
+local contentFrame = Instance.new("ScrollingFrame")
+contentFrame.Name = "ContentFrame"
+contentFrame.Size = UDim2.new(1, -20, 1, -65)
+contentFrame.Position = UDim2.new(0, 10, 0, 55)
+contentFrame.BackgroundTransparency = 1
+contentFrame.BorderSizePixel = 0
+contentFrame.ScrollBarThickness = 5
+contentFrame.CanvasSize = UDim2.new(0, 0, 0, 600)
+contentFrame.Parent = mainFrame
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 10)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = contentFrame
+
+-- ==================== CONTENT SECTIONS ====================
+
+-- SECTION: TELEPORT MODE
+local modeLabel = Instance.new("TextLabel")
+modeLabel.Name = "ModeLabel"
+modeLabel.Size = UDim2.new(1, 0, 0, 25)
+modeLabel.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+modeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+modeLabel.TextSize = 12
+modeLabel.Font = Enum.Font.GothamBold
+modeLabel.Text = "📍 MODE TELEPORT"
+modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+modeLabel.Padding = UDim.new(0, 10)
+modeLabel.Parent = contentFrame
+modeLabel.LayoutOrder = 1
+
+local modeCorner = Instance.new("UICorner")
+modeCorner.CornerRadius = UDim.new(0, 6)
+modeCorner.Parent = modeLabel
+
+-- MODE BUTTONS
+local modeContainer = Instance.new("Frame")
+modeContainer.Name = "ModeContainer"
+modeContainer.Size = UDim2.new(1, 0, 0, 50)
+modeContainer.BackgroundTransparency = 1
+modeContainer.Parent = contentFrame
+modeContainer.LayoutOrder = 2
+
+local modeLayout = Instance.new("UIListLayout")
+modeLayout.Padding = UDim.new(0, 8)
+modeLayout.FillDirection = Enum.FillDirection.Horizontal
+modeLayout.SortOrder = Enum.SortOrder.LayoutOrder
+modeLayout.Parent = modeContainer
+
+local allBtn = Instance.new("TextButton")
+allBtn.Name = "AllBtn"
+allBtn.Size = UDim2.new(0.5, -4, 0, 40)
+allBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+allBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+allBtn.TextSize = 12
+allBtn.Font = Enum.Font.GothamBold
+allBtn.Text = "📌 SEMUA LOKASI"
+allBtn.Parent = modeContainer
+allBtn.LayoutOrder = 1
+
+local allBtnCorner = Instance.new("UICorner")
+allBtnCorner.CornerRadius = UDim.new(0, 6)
+allBtnCorner.Parent = allBtn
+
+local singleBtn = Instance.new("TextButton")
+singleBtn.Name = "SingleBtn"
+singleBtn.Size = UDim2.new(0.5, -4, 0, 40)
+singleBtn.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+singleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+singleBtn.TextSize = 12
+singleBtn.Font = Enum.Font.GothamBold
+singleBtn.Text = "🎯 PILIH LOKASI"
+singleBtn.Parent = modeContainer
+singleBtn.LayoutOrder = 2
+
+local singleBtnCorner = Instance.new("UICorner")
+singleBtnCorner.CornerRadius = UDim.new(0, 6)
+singleBtnCorner.Parent = singleBtn
+
+-- SECTION: CATEGORY
+local categoryLabel = Instance.new("TextLabel")
+categoryLabel.Name = "CategoryLabel"
+categoryLabel.Size = UDim2.new(1, 0, 0, 25)
+categoryLabel.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+categoryLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+categoryLabel.TextSize = 12
+categoryLabel.Font = Enum.Font.GothamBold
+categoryLabel.Text = "🏷️ KATEGORI"
+categoryLabel.TextXAlignment = Enum.TextXAlignment.Left
+categoryLabel.Padding = UDim.new(0, 10)
+categoryLabel.Parent = contentFrame
+categoryLabel.LayoutOrder = 3
+categoryLabel.Visible = false
+
+local categoryCorner = Instance.new("UICorner")
+categoryCorner.CornerRadius = UDim.new(0, 6)
+categoryCorner.Parent = categoryLabel
+
+-- CATEGORY BUTTONS
+local categoryContainer = Instance.new("Frame")
+categoryContainer.Name = "CategoryContainer"
+categoryContainer.Size = UDim2.new(1, 0, 0, 110)
+categoryContainer.BackgroundTransparency = 1
+categoryContainer.Parent = contentFrame
+categoryContainer.LayoutOrder = 4
+categoryContainer.Visible = false
+
+local categoryBtnLayout = Instance.new("UIGridLayout")
+categoryBtnLayout.CellSize = UDim2.new(1, 0, 0, 35)
+categoryBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+categoryBtnLayout.Padding = UDim.new(0, 5)
+categoryBtnLayout.Parent = categoryContainer
+
+for catName, _ in pairs(TELEPORT_DESTINATIONS) do
+	local catBtn = Instance.new("TextButton")
+	catBtn.Name = "Cat_" .. catName
+	catBtn.Size = UDim2.new(1, 0, 0, 30)
+	catBtn.BackgroundColor3 = if guiState.selectedCategory == catName then Color3.fromRGB(100, 150, 255) else Color3.fromRGB(50, 50, 60)
+	catBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	catBtn.TextSize = 11
+	catBtn.Font = Enum.Font.Gotham
+	catBtn.Text = "📂 " .. catName
+	catBtn.Parent = categoryContainer
+	
+	local catBtnCorner = Instance.new("UICorner")
+	catBtnCorner.CornerRadius = UDim.new(0, 5)
+	catBtnCorner.Parent = catBtn
+	
+	catBtn.MouseButton1Click:Connect(function()
+		guiState.selectedCategory = catName
+		guiState.selectedDestination = 1
+		updateLocationList()
+		local categoryButtons = categoryContainer:GetChildren()
+		for _, btn in ipairs(categoryButtons) do
+			if btn:IsA("TextButton") then
+				btn.BackgroundColor3 = if btn.Name == "Cat_" .. catName then Color3.fromRGB(100, 150, 255) else Color3.fromRGB(50, 50, 60)
+			end
+		end
+		updateStatus("✓ Kategori: " .. catName .. " dipilih")
+	end)
+end
+
+-- SECTION: LOCATION
+local locationLabel = Instance.new("TextLabel")
+locationLabel.Name = "LocationLabel"
+locationLabel.Size = UDim2.new(1, 0, 0, 25)
+locationLabel.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+locationLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+locationLabel.TextSize = 12
+locationLabel.Font = Enum.Font.GothamBold
+locationLabel.Text = "🎯 PILIH LOKASI"
+locationLabel.TextXAlignment = Enum.TextXAlignment.Left
+locationLabel.Padding = UDim.new(0, 10)
+locationLabel.Parent = contentFrame
+locationLabel.LayoutOrder = 5
+locationLabel.Visible = false
+
+local locationCorner = Instance.new("UICorner")
+locationCorner.CornerRadius = UDim.new(0, 6)
+locationCorner.Parent = locationLabel
+
+-- LOCATION CONTAINER
+local locationContainer = Instance.new("Frame")
+locationContainer.Name = "LocationContainer"
+locationContainer.Size = UDim2.new(1, 0, 0, 200)
+locationContainer.BackgroundTransparency = 1
+locationContainer.Parent = contentFrame
+locationContainer.LayoutOrder = 6
+locationContainer.Visible = false
+
+local locationLayout = Instance.new("UIGridLayout")
+locationLayout.CellSize = UDim2.new(1, 0, 0, 35)
+locationLayout.SortOrder = Enum.SortOrder.LayoutOrder
+locationLayout.Padding = UDim.new(0, 5)
+locationLayout.Parent = locationContainer
+
+-- SECTION: SETTINGS
+local settingsLabel = Instance.new("TextLabel")
+settingsLabel.Name = "SettingsLabel"
+settingsLabel.Size = UDim2.new(1, 0, 0, 25)
+settingsLabel.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+settingsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+settingsLabel.TextSize = 12
+settingsLabel.Font = Enum.Font.GothamBold
+settingsLabel.Text = "⚙️ PENGATURAN"
+settingsLabel.TextXAlignment = Enum.TextXAlignment.Left
+settingsLabel.Padding = UDim.new(0, 10)
+settingsLabel.Parent = contentFrame
+settingsLabel.LayoutOrder = 7
+
+local settingsCorner = Instance.new("UICorner")
+settingsCorner.CornerRadius = UDim.new(0, 6)
+settingsCorner.Parent = settingsLabel
+
+-- DELAY INPUT
+local delayContainer = Instance.new("Frame")
+delayContainer.Name = "DelayContainer"
+delayContainer.Size = UDim2.new(1, 0, 0, 40)
+delayContainer.BackgroundColor3 = Color3.fromRGB(45, 55, 75)
+delayContainer.Parent = contentFrame
+delayContainer.LayoutOrder = 8
+
+local delayCorner = Instance.new("UICorner")
+delayCorner.CornerRadius = UDim.new(0, 6)
+delayCorner.Parent = delayContainer
+
+local delayLabel = Instance.new("TextLabel")
+delayLabel.Name = "DelayLabel"
+delayLabel.Size = UDim2.new(0.65, 0, 1, 0)
+delayLabel.BackgroundTransparency = 1
+delayLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+delayLabel.TextSize = 11
+delayLabel.Font = Enum.Font.Gotham
+delayLabel.Text = "⏱️ Jeda Antar Teleport (detik):"
+delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+delayLabel.Padding = UDim.new(0, 5)
+delayLabel.Parent = delayContainer
+
+local delayInput = Instance.new("TextBox")
+delayInput.Name = "DelayInput"
+delayInput.Size = UDim2.new(0.35, -5, 0, 30)
+delayInput.Position = UDim2.new(0.65, 5, 0, 5)
+delayInput.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+delayInput.TextColor3 = Color3.fromRGB(255, 200, 0)
+delayInput.TextSize = 12
+delayInput.Font = Enum.Font.GothamBold
+delayInput.Text = "5"
+delayInput.PlaceholderText = "Detik"
+delayInput.Parent = delayContainer
+
+local delayInputCorner = Instance.new("UICorner")
+delayInputCorner.CornerRadius = UDim.new(0, 4)
+delayInputCorner.Parent = delayInput
+
+-- ACTION BUTTONS
+local actionLabel = Instance.new("TextLabel")
+actionLabel.Name = "ActionLabel"
+actionLabel.Size = UDim2.new(1, 0, 0, 25)
+actionLabel.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+actionLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+actionLabel.TextSize = 12
+actionLabel.Font = Enum.Font.GothamBold
+actionLabel.Text = "🎮 KONTROL"
+actionLabel.TextXAlignment = Enum.TextXAlignment.Left
+actionLabel.Padding = UDim.new(0, 10)
+actionLabel.Parent = contentFrame
+actionLabel.LayoutOrder = 9
+
+local actionCorner = Instance.new("UICorner")
+actionCorner.CornerRadius = UDim.new(0, 6)
+actionCorner.Parent = actionLabel
+
+local actionContainer = Instance.new("Frame")
+actionContainer.Name = "ActionContainer"
+actionContainer.Size = UDim2.new(1, 0, 0, 95)
+actionContainer.BackgroundTransparency = 1
+actionContainer.Parent = contentFrame
+actionContainer.LayoutOrder = 10
+
+local actionLayout = Instance.new("UIListLayout")
+actionLayout.Padding = UDim.new(0, 6)
+actionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+actionLayout.Parent = actionContainer
+
+local startBtn = Instance.new("TextButton")
+startBtn.Name = "StartBtn"
+startBtn.Size = UDim2.new(1, 0, 0, 40)
+startBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 100)
+startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+startBtn.TextSize = 13
+startBtn.Font = Enum.Font.GothamBold
+startBtn.Text = "▶ MULAI TELEPORT"
+startBtn.Parent = actionContainer
+startBtn.LayoutOrder = 1
+
+local startBtnCorner = Instance.new("UICorner")
+startBtnCorner.CornerRadius = UDim.new(0, 6)
+startBtnCorner.Parent = startBtn
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Name = "StopBtn"
+stopBtn.Size = UDim2.new(1, 0, 0, 40)
+stopBtn.BackgroundColor3 = Color3.fromRGB(220, 80, 80)
+stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopBtn.TextSize = 13
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.Text = "⏹ STOP TELEPORT"
+stopBtn.Parent = actionContainer
+stopBtn.LayoutOrder = 2
+
+local stopBtnCorner = Instance.new("UICorner")
+stopBtnCorner.CornerRadius = UDim.new(0, 6)
+stopBtnCorner.Parent = stopBtn
+
+-- STATUS LABEL
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "StatusLabel"
+statusLabel.Size = UDim2.new(1, 0, 0, 35)
+statusLabel.BackgroundColor3 = Color3.fromRGB(40, 60, 50)
+statusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+statusLabel.TextSize = 11
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.Text = "✓ Status: SIAP"
+statusLabel.TextWrapped = true
+statusLabel.Parent = contentFrame
+statusLabel.LayoutOrder = 11
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 6)
+statusCorner.Parent = statusLabel
+
+-- ==================== FUNGSI UI ====================
+
+-- Update Location List
+local function updateLocationList()
+	-- Hapus item lama
+	for _, child in ipairs(locationContainer:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+	
+	local destinations = TELEPORT_DESTINATIONS[guiState.selectedCategory]
+	if not destinations then return end
+	
+	for i, dest in ipairs(destinations) do
+		local btn = Instance.new("TextButton")
+		btn.Name = "Location_" .. i
+		btn.Size = UDim2.new(1, 0, 0, 30)
+		btn.BackgroundColor3 = if guiState.selectedDestination == i then Color3.fromRGB(100, 150, 255) else Color3.fromRGB(55, 65, 85)
+		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		btn.TextSize = 11
+		btn.Font = Enum.Font.Gotham
+		btn.Text = "📍 " .. dest.name
+		btn.Parent = locationContainer
+		btn.LayoutOrder = i
+		
+		local btnCorner = Instance.new("UICorner")
+		btnCorner.CornerRadius = UDim.new(0, 5)
+		btnCorner.Parent = btn
+		
+		btn.MouseButton1Click:Connect(function()
+			guiState.selectedDestination = i
+			updateLocationList()
+			updateStatus("✓ Lokasi: " .. dest.name .. " dipilih")
+		end)
+	end
+end
+
+-- Update Mode Buttons
+local function updateModeButtons()
+	if guiState.teleportMode == "all" then
+		allBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+		singleBtn.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+		categoryLabel.Visible = false
+		categoryContainer.Visible = false
+		locationLabel.Visible = false
+		locationContainer.Visible = false
+		updateStatus("✓ Mode: SEMUA LOKASI")
+	else
+		allBtn.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+		singleBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+		categoryLabel.Visible = true
+		categoryContainer.Visible = true
+		locationLabel.Visible = true
+		locationContainer.Visible = true
+		updateLocationList()
+		updateStatus("✓ Mode: PILIH LOKASI")
+	end
+end
+
+-- ==================== EVENT HANDLERS ====================
+
+-- Drag functionality
+local dragging = false
+local dragStart = nil
+local frameStart = nil
+
+titleBar.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		frameStart = mainFrame.Position
+	end
+end)
+
+titleBar.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		mainFrame.Position = frameStart + UDim2.new(0, delta.X, 0, delta.Y)
+	end
+end)
+
+-- Minimize
+minimizeBtn.MouseButton1Click:Connect(function()
+	guiState.isOpen = not guiState.isOpen
+	contentFrame.Visible = guiState.isOpen
+	if guiState.isOpen then
+		mainFrame.Size = UDim2.new(0, 380, 0, 550)
+		minimizeBtn.Text = "—"
+	else
+		mainFrame.Size = UDim2.new(0, 380, 0, 45)
+		minimizeBtn.Text = "+"
+	end
+end)
+
+-- Close
+closeBtn.MouseButton1Click:Connect(function()
+	screenGui:Destroy()
+end)
+
+-- Mode buttons
+allBtn.MouseButton1Click:Connect(function()
+	guiState.teleportMode = "all"
+	updateModeButtons()
+end)
+
+singleBtn.MouseButton1Click:Connect(function()
+	guiState.teleportMode = "single"
+	updateModeButtons()
+end)
+
+-- Start/Stop buttons
+startBtn.MouseButton1Click:Connect(function()
+	local delay = tonumber(delayInput.Text) or 5
+	if delay < 1 then delay = 1 end
+	guiState.teleportDelay = delay
+	startTeleporting()
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	stopTeleporting()
+end)
+
+-- Delay input validation
+delayInput.FocusLost:Connect(function()
+	local value = tonumber(delayInput.Text)
+	if value and value > 0 then
+		guiState.teleportDelay = value
+	else
+		delayInput.Text = tostring(guiState.teleportDelay)
+	end
+end)
+
+-- Hover effects
+for _, btn in ipairs({allBtn, singleBtn, startBtn, stopBtn, minimizeBtn, closeBtn}) do
+	btn.MouseEnter:Connect(function()
+		btn.TextTransparency = 0.8
+	end)
+	btn.MouseLeave:Connect(function()
+		btn.TextTransparency = 0
+	end)
+end
+
+-- ==================== INITIAL SETUP ====================
+
+updateModeButtons()
+print("✓ Auto Teleport GUI v2.0 berhasil dimuat!")
+print("✓ Fitur: Humanoid:MoveTo(), Auto ProximityPrompt, Ownership Detection")
+updateStatus("✅ Siap digunakan!")
