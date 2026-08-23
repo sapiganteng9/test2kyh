@@ -1,0 +1,527 @@
+--[[
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║  JAGA LILIN - TELEPORT SCRIPT v1.0                              ║
+    ║  by SAPIGANTENG                                                  ║
+    ║  Teleport Script dengan GUI untuk Executor Roblox                ║
+    ╚══════════════════════════════════════════════════════════════════╝
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- ==================== KONFIGURASI ====================
+local CONFIG = {
+    windowTitle = "JAGA LILIN",
+    watermark = "by SAPIGANTENG",
+    defaultDelay = 2,
+    minDelay = 1,
+    maxDelay = 100
+}
+
+-- ==================== STRUKTUR TELEPORT ====================
+local TELEPORT_TARGETS = {
+    pemotongan = "workspace.Kios aktif.Kios_(player).alatMasak.pemotongan",
+    jamurRebus = "workspace.Kios aktif.Kios_(player).Mejamakan.JamurRebus",
+    pisangRajaRebus = "workspace.Kios aktif.Kios_(player).Mejamakan.Pisang raja rebus",
+    sateGagak = "workspace.Kios aktif.Kios_(player).Mejamakan.sate gagak",
+    sateKepiting = "workspace.Kios aktif.Kios_(player).Mejamakan.sate kepiting",
+    tumiKamboja = "workspace.Kios aktif.Kios_(player).Mejamakan.tumis kamboja",
+    rakDupa = "workspace.Kios aktif.Kios_(player).rak.rak dupa",
+    rakKemenyan = "workspace.Kios aktif.Kios_(player).rak.rak kemenyan",
+    rakKepiting = "workspace.Kios aktif.Kios_(player).rak.rakkepiting",
+    rakMelati = "workspace.Kios aktif.Kios_(player).rak.rakmelati"
+}
+
+local DISPLAY_NAMES = {
+    pemotongan = "Pemotongan",
+    jamurRebus = "Jamur Rebus",
+    pisangRajaRebus = "Pisang Raja Rebus",
+    sateGagak = "Sate Gagak",
+    sateKepiting = "Sate Kepiting",
+    tumiKamboja = "Tumis Kamboja",
+    rakDupa = "Rak Dupa",
+    rakKemenyan = "Rak Kemenyan",
+    rakKepiting = "Rak Kepiting",
+    rakMelati = "Rak Melati"
+}
+
+-- ==================== STATE SCRIPT ====================
+local scriptState = {
+    isRunning = false,
+    isPaused = false,
+    delay = CONFIG.defaultDelay,
+    selectedTargets = {},
+    windowMinimized = false,
+    windowDragging = false,
+    dragStart = Vector2.new(0, 0)
+}
+
+-- ==================== UTILITY FUNCTIONS ====================
+local function getPlayerKios()
+    local playerName = player.Name
+    local kiosAktif = workspace:FindFirstChild("Kios aktif")
+    
+    if not kiosAktif then
+        warn("[JAGA LILIN] Kios aktif tidak ditemukan!")
+        return nil
+    end
+    
+    local playerKios = kiosAktif:FindFirstChild("Kios_(" .. playerName .. ")")
+    if not playerKios then
+        warn("[JAGA LILIN] Kios milik " .. playerName .. " tidak ditemukan!")
+        return nil
+    end
+    
+    return playerKios
+end
+
+local function getTeleportPart(targetKey)
+    local playerKios = getPlayerKios()
+    if not playerKios then return nil end
+    
+    local pathMap = {
+        pemotongan = function() return playerKios:FindFirstChild("alatMasak") and playerKios.alatMasak:FindFirstChild("pemotongan") end,
+        jamurRebus = function() return playerKios:FindFirstChild("Mejamakan") and playerKios.Mejamakan:FindFirstChild("JamurRebus") end,
+        pisangRajaRebus = function() return playerKios:FindFirstChild("Mejamakan") and playerKios.Mejamakan:FindFirstChild("Pisang raja rebus") end,
+        sateGagak = function() return playerKios:FindFirstChild("Mejamakan") and playerKios.Mejamakan:FindFirstChild("sate gagak") end,
+        sateKepiting = function() return playerKios:FindFirstChild("Mejamakan") and playerKios.Mejamakan:FindFirstChild("sate kepiting") end,
+        tumiKamboja = function() return playerKios:FindFirstChild("Mejamakan") and playerKios.Mejamakan:FindFirstChild("tumis kamboja") end,
+        rakDupa = function() return playerKios:FindFirstChild("rak") and playerKios.rak:FindFirstChild("rak dupa") end,
+        rakKemenyan = function() return playerKios:FindFirstChild("rak") and playerKios.rak:FindFirstChild("rak kemenyan") end,
+        rakKepiting = function() return playerKios:FindFirstChild("rak") and playerKios.rak:FindFirstChild("rakkepiting") end,
+        rakMelati = function() return playerKios:FindFirstChild("rak") and playerKios.rak:FindFirstChild("rakmelati") end,
+    }
+    
+    if pathMap[targetKey] then
+        return pathMap[targetKey]()
+    end
+    
+    return nil
+end
+
+local function teleportToTarget(targetKey)
+    local targetPart = getTeleportPart(targetKey)
+    
+    if not targetPart then
+        warn("[JAGA LILIN] Target tidak ditemukan: " .. targetKey)
+        return false
+    end
+    
+    local character = player.Character
+    if not character then return false end
+    
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return false end
+    
+    -- Teleport ke target
+    rootPart.CFrame = targetPart.CFrame + Vector3.new(0, 3, 0)
+    task.wait(0.3)
+    
+    return true
+end
+
+local function executeProximityPrompts()
+    local character = player.Character
+    if not character then return end
+    
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    
+    for _, instance in ipairs(workspace:GetDescendants()) do
+        if instance:IsA("ProximityPrompt") then
+            local prompt = instance
+            local targetPart = prompt.Parent
+            
+            if targetPart and targetPart:IsA("BasePart") and rootPart and rootPart.Parent then
+                local distance = (targetPart.Position - rootPart.Position).Magnitude
+                if distance <= prompt.MaxActivationDistance then
+                    prompt:InputHoldBegin()
+                    task.wait(prompt.HoldDuration or 0.5)
+                    prompt:InputHoldEnd()
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- ==================== SCREEN GUI CREATION ====================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "JagaLilinGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- ==================== MAIN WINDOW ====================
+local mainWindow = Instance.new("Frame")
+mainWindow.Name = "MainWindow"
+mainWindow.Size = UDim2.new(0, 350, 0, 600)
+mainWindow.Position = UDim2.new(0.5, -175, 0.5, -300)
+mainWindow.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+mainWindow.BorderSizePixel = 0
+mainWindow.Parent = screenGui
+
+-- Gradient background
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new(Color3.fromRGB(35, 35, 50), Color3.fromRGB(20, 20, 30))
+gradient.Rotation = 45
+gradient.Parent = mainWindow
+
+-- Rounded corners
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainWindow
+
+-- ==================== TITLE BAR ====================
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 40)
+titleBar.BackgroundColor3 = Color3.fromRGB(20, 120, 200)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainWindow
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 10)
+titleCorner.Parent = titleBar
+
+local titleText = Instance.new("TextLabel")
+titleText.Text = CONFIG.windowTitle
+titleText.Size = UDim2.new(1, -80, 1, 0)
+titleText.BackgroundTransparency = 1
+titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleText.TextSize = 18
+titleText.Font = Enum.Font.GothamBold
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.TextScaled = false
+titleText.Parent = titleBar
+
+local titlePadding = Instance.new("UIPadding")
+titlePadding.PaddingLeft = UDim.new(0, 15)
+titlePadding.Parent = titleText
+
+-- ==================== TITLE BAR BUTTONS ====================
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 35, 1, 0)
+minimizeBtn.Position = UDim2.new(1, -75, 0, 0)
+minimizeBtn.BackgroundTransparency = 1
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.TextSize = 18
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.Text = "—"
+minimizeBtn.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Name = "CloseBtn"
+closeBtn.Size = UDim2.new(0, 35, 1, 0)
+closeBtn.Position = UDim2.new(1, -40, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+closeBtn.TextSize = 18
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "×"
+closeBtn.Parent = titleBar
+
+-- ==================== CONTENT FRAME ====================
+local contentFrame = Instance.new("Frame")
+contentFrame.Name = "ContentFrame"
+contentFrame.Size = UDim2.new(1, 0, 1, -40)
+contentFrame.Position = UDim2.new(0, 0, 0, 40)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = mainWindow
+
+-- ==================== WATERMARK ====================
+local watermarkLabel = Instance.new("TextLabel")
+watermarkLabel.Text = CONFIG.watermark
+watermarkLabel.Size = UDim2.new(1, 0, 0, 20)
+watermarkLabel.Position = UDim2.new(0, 0, 0, 5)
+watermarkLabel.BackgroundTransparency = 1
+watermarkLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+watermarkLabel.TextSize = 10
+watermarkLabel.Font = Enum.Font.GothamBold
+watermarkLabel.TextXAlignment = Enum.TextXAlignment.Center
+watermarkLabel.Parent = contentFrame
+
+-- ==================== DELAY CONTROL ====================
+local delayLabel = Instance.new("TextLabel")
+delayLabel.Text = "Delay Antar Teleport:"
+delayLabel.Size = UDim2.new(1, -20, 0, 20)
+delayLabel.Position = UDim2.new(0, 10, 0, 30)
+delayLabel.BackgroundTransparency = 1
+delayLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+delayLabel.TextSize = 12
+delayLabel.Font = Enum.Font.GothamBold
+delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+delayLabel.Parent = contentFrame
+
+local delayInputBox = Instance.new("TextBox")
+delayInputBox.Name = "DelayInputBox"
+delayInputBox.Text = tostring(scriptState.delay)
+delayInputBox.Size = UDim2.new(0, 80, 0, 25)
+delayInputBox.Position = UDim2.new(1, -90, 0, 28)
+delayInputBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+delayInputBox.BorderSizePixel = 1
+delayInputBox.BorderColor3 = Color3.fromRGB(20, 120, 200)
+delayInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+delayInputBox.TextSize = 14
+delayInputBox.Font = Enum.Font.GothamMedium
+delayInputBox.Parent = contentFrame
+
+local delayCorner = Instance.new("UICorner")
+delayCorner.CornerRadius = UDim.new(0, 5)
+delayCorner.Parent = delayInputBox
+
+-- ==================== SCROLLING FRAME UNTUK TARGETS ====================
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Name = "ScrollFrame"
+scrollFrame.Size = UDim2.new(1, -20, 1, -120)
+scrollFrame.Position = UDim2.new(0, 10, 0, 65)
+scrollFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+scrollFrame.BorderSizePixel = 1
+scrollFrame.BorderColor3 = Color3.fromRGB(50, 50, 70)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.ScrollBarThickness = 8
+scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(20, 120, 200)
+scrollFrame.Parent = contentFrame
+
+local scrollCorner = Instance.new("UICorner")
+scrollCorner.CornerRadius = UDim.new(0, 5)
+scrollCorner.Parent = scrollFrame
+
+-- ==================== CHECKBOX ITEMS ====================
+local itemSize = 30
+local currentY = 0
+
+local checkboxItems = {}
+
+for key, displayName in pairs(DISPLAY_NAMES) do
+    local itemFrame = Instance.new("Frame")
+    itemFrame.Name = key
+    itemFrame.Size = UDim2.new(1, -10, 0, itemSize)
+    itemFrame.Position = UDim2.new(0, 5, 0, currentY)
+    itemFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    itemFrame.BorderSizePixel = 0
+    itemFrame.Parent = scrollFrame
+    
+    local itemCorner = Instance.new("UICorner")
+    itemCorner.CornerRadius = UDim.new(0, 5)
+    itemCorner.Parent = itemFrame
+    
+    local checkbox = Instance.new("TextButton")
+    checkbox.Name = "Checkbox"
+    checkbox.Size = UDim2.new(0, 20, 0, 20)
+    checkbox.Position = UDim2.new(0, 5, 0.5, -10)
+    checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    checkbox.BorderSizePixel = 1
+    checkbox.BorderColor3 = Color3.fromRGB(20, 120, 200)
+    checkbox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    checkbox.Text = ""
+    checkbox.Font = Enum.Font.GothamBold
+    checkbox.TextSize = 14
+    checkbox.Parent = itemFrame
+    
+    local checkboxCorner = Instance.new("UICorner")
+    checkboxCorner.CornerRadius = UDim.new(0, 3)
+    checkboxCorner.Parent = checkbox
+    
+    local itemLabel = Instance.new("TextLabel")
+    itemLabel.Text = displayName
+    itemLabel.Size = UDim2.new(1, -40, 1, 0)
+    itemLabel.Position = UDim2.new(0, 30, 0, 0)
+    itemLabel.BackgroundTransparency = 1
+    itemLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    itemLabel.TextSize = 12
+    itemLabel.Font = Enum.Font.GothamMedium
+    itemLabel.TextXAlignment = Enum.TextXAlignment.Left
+    itemLabel.Parent = itemFrame
+    
+    local checkState = {
+        isChecked = false,
+        key = key
+    }
+    
+    checkbox.MouseButton1Click:Connect(function()
+        checkState.isChecked = not checkState.isChecked
+        scriptState.selectedTargets[key] = checkState.isChecked
+        
+        if checkState.isChecked then
+            checkbox.BackgroundColor3 = Color3.fromRGB(20, 120, 200)
+            checkbox.Text = "✓"
+        else
+            checkbox.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+            checkbox.Text = ""
+        end
+    end)
+    
+    checkboxItems[key] = checkState
+    currentY = currentY + itemSize + 5
+end
+
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, currentY)
+
+-- ==================== BUTTON CONTROLS ====================
+local buttonFrame = Instance.new("Frame")
+buttonFrame.Name = "ButtonFrame"
+buttonFrame.Size = UDim2.new(1, -20, 0, 50)
+buttonFrame.Position = UDim2.new(0, 10, 1, -60)
+buttonFrame.BackgroundTransparency = 1
+buttonFrame.Parent = contentFrame
+
+local startBtn = Instance.new("TextButton")
+startBtn.Name = "StartBtn"
+startBtn.Size = UDim2.new(0.48, 0, 1, 0)
+startBtn.Position = UDim2.new(0, 0, 0, 0)
+startBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+startBtn.BorderSizePixel = 0
+startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+startBtn.TextSize = 12
+startBtn.Font = Enum.Font.GothamBold
+startBtn.Text = "START"
+startBtn.Parent = buttonFrame
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 5)
+startCorner.Parent = startBtn
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Name = "StopBtn"
+stopBtn.Size = UDim2.new(0.48, 0, 1, 0)
+stopBtn.Position = UDim2.new(0.52, 0, 0, 0)
+stopBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+stopBtn.BorderSizePixel = 0
+stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopBtn.TextSize = 12
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.Text = "STOP"
+stopBtn.Parent = buttonFrame
+
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 5)
+stopCorner.Parent = stopBtn
+
+-- ==================== BUTTON FUNCTIONALITY ====================
+startBtn.MouseButton1Click:Connect(function()
+    local selectedCount = 0
+    for _, isSelected in pairs(scriptState.selectedTargets) do
+        if isSelected then selectedCount = selectedCount + 1 end
+    end
+    
+    if selectedCount == 0 then
+        warn("[JAGA LILIN] Pilih minimal 1 target!")
+        return
+    end
+    
+    local delayValue = tonumber(delayInputBox.Text)
+    if not delayValue or delayValue < CONFIG.minDelay or delayValue > CONFIG.maxDelay then
+        warn("[JAGA LILIN] Delay harus antara " .. CONFIG.minDelay .. " hingga " .. CONFIG.maxDelay)
+        return
+    end
+    
+    scriptState.delay = delayValue
+    scriptState.isRunning = true
+    scriptState.isPaused = false
+    
+    print("[JAGA LILIN] Script dimulai dengan delay: " .. scriptState.delay .. " detik")
+    startBtn.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+    scriptState.isRunning = false
+    scriptState.isPaused = true
+    
+    print("[JAGA LILIN] Script dihentikan")
+    startBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+end)
+
+-- ==================== WINDOW CONTROLS ====================
+minimizeBtn.MouseButton1Click:Connect(function()
+    scriptState.windowMinimized = not scriptState.windowMinimized
+    
+    if scriptState.windowMinimized then
+        contentFrame.Visible = false
+        mainWindow.Size = UDim2.new(0, 350, 0, 40)
+        minimizeBtn.Text = "□"
+    else
+        contentFrame.Visible = true
+        mainWindow.Size = UDim2.new(0, 350, 0, 600)
+        minimizeBtn.Text = "—"
+    end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    scriptState.isRunning = false
+    screenGui:Destroy()
+    print("[JAGA LILIN] GUI ditutup")
+end)
+
+-- ==================== DRAG WINDOW ====================
+titleBar.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        scriptState.windowDragging = true
+        scriptState.dragStart = mouse.Position
+    end
+end)
+
+titleBar.InputEnded:Connect(function(input, gameProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        scriptState.windowDragging = false
+    end
+end)
+
+mouse.Move:Connect(function()
+    if scriptState.windowDragging then
+        local delta = mouse.Position - scriptState.dragStart
+        scriptState.dragStart = mouse.Position
+        mainWindow.Position = mainWindow.Position + UDim2.new(0, delta.X, 0, delta.Y)
+    end
+end)
+
+-- ==================== MAIN TELEPORT LOOP ====================
+local teleportCoroutine = coroutine.create(function()
+    while true do
+        task.wait(0.1)
+        
+        if scriptState.isRunning then
+            local targetsList = {}
+            for key, isSelected in pairs(scriptState.selectedTargets) do
+                if isSelected then
+                    table.insert(targetsList, key)
+                end
+            end
+            
+            if #targetsList > 0 then
+                for _, targetKey in ipairs(targetsList) do
+                    if not scriptState.isRunning then break end
+                    
+                    print("[JAGA LILIN] Teleporting ke: " .. DISPLAY_NAMES[targetKey])
+                    
+                    -- Teleport ke target
+                    if teleportToTarget(targetKey) then
+                        task.wait(0.5)
+                        
+                        -- Execute ProximityPrompt
+                        print("[JAGA LILIN] Executing ProximityPrompt...")
+                        executeProximityPrompts()
+                        
+                        task.wait(0.5)
+                        
+                        -- Tunggu delay sebelum teleport berikutnya
+                        task.wait(scriptState.delay)
+                    else
+                        warn("[JAGA LILIN] Gagal teleport ke " .. targetKey)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+coroutine.resume(teleportCoroutine)
+
+print("[JAGA LILIN] Script Loaded Successfully!")
+print("[JAGA LILIN] by SAPIGANTENG")
