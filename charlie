@@ -1,0 +1,402 @@
+-- TELEPORT KIOS (Executor-friendly, fixed syntax)
+-- Gunakan di executor (Synapse/Krnl/etc). Menangkap error, safe GUI parenting, owner heuristik, sequential teleport.
+
+local function errHandler(err)
+    warn("[Teleport] Error: " .. tostring(err))
+    warn(debug.traceback())
+end
+
+xpcall(function()
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local CoreGui = game:GetService("CoreGui")
+
+    print("[Teleport] start")
+
+    -- tunggu LocalPlayer
+    local player = Players.LocalPlayer
+    local waitCount = 0
+    while not player and waitCount < 60 do
+        task.wait(0.1)
+        player = Players.LocalPlayer
+        waitCount = waitCount + 1
+    end
+    if not player then
+        warn("[Teleport] LocalPlayer tidak ditemukan setelah menunggu.")
+        return
+    end
+    print("[Teleport] LocalPlayer:", player.Name)
+
+    -- CONFIG
+    local PROXIMITY_CHECK_RADIUS = 3
+    local OCCUPIED_TIMEOUT = 6
+    local SAFE_OFFSETS = {
+        Vector3.new(5, 3, 0),
+        Vector3.new(-5, 3, 0),
+        Vector3.new(0, 3, 5),
+        Vector3.new(0, 3, -5),
+    }
+
+    -- DAFTAR LOKASI (sesuaikan searchNames jika game berbeda)
+    local LOCATION_CATEGORIES = {
+        {
+            category = "Meja Makan",
+            locations = {
+                {name = "Jamur Rebus", searchNames = {"JamurRebus","jamur_rebus","JamurKuburan","Item_JamurRebus"}},
+                {name = "Pisang Raja Rebus", searchNames = {"PisangRajaRebus","Pisang_Raja_Rebus","Item_PisangRajaRebus","pisang_raja_rebus"}},
+            }
+        },
+        {
+            category = "Rak",
+            locations = {
+                {name = "Rak Dupa", searchNames = {"RakDupa","Rak_Dupa","rak_dupa"}},
+            }
+        },
+        {
+            category = "Alat Masak",
+            locations = {
+                {name = "Pemotongan", searchNames = {"Pemotongan","pemotongan","AlatMasak"}},
+            }
+        }
+    }
+
+    -- safe GetAttribute wrapper
+    local function safeGetAttribute(inst, attr)
+        if not inst then return nil end
+        if type(inst.GetAttribute) ~= "function" then return nil end
+        local ok, res = pcall(function() return inst:GetAttribute(attr) end)
+        if ok then return res end
+        return nil
+    end
+
+    -- Heuristik get owner dari instance (sesuaikan jika game pakai format lain)
+    local function getOwnerNameOfInstance(inst)
+        if not inst then return nil end
+
+        -- Attribute common
+        local a = safeGetAttribute(inst, "Owner") or safeGetAttribute(inst, "OwnerName")
+        if not a then
+            a = safeGetAttribute(inst, "creator") or safeGetAttribute(inst, "creatorName")
+        end
+        if a and a ~= "" then return tostring(a) end
+
+        -- Child values
+        local ownerChild = inst:FindFirstChild("Owner") or inst:FindFirstChild("OwnerName") or inst:FindFirstChild("OwnerUserId") or inst:FindFirstChild("creator")
+        if ownerChild then
+            if ownerChild:IsA("StringValue") then return ownerChild.Value end
+            if ownerChild:IsA("IntValue") or ownerChild:IsA("NumberValue") then return tostring(ownerChild.Value) end
+        end
+
+        -- Parent named player's name
+        if inst.Parent and inst.Parent.Name == player.Name then return player.Name end
+
+        -- Name contains player name
+        if type(inst.Name) == "string" and string.find(string.lower(inst.Name), string.lower(player.Name), 1, true) then
+            return player.Name
+        end
+
+        -- Descendant heuristic (first StringValue that mentions owner/creator)
+        local ok, descendant = pcall(function() return inst:FindFirstChildWhichIsA("StringValue", true) end)
+        if ok and descendant and type(descendant.Name) == "string" then
+            local n = descendant.Name:lower()
+            if n:find("owner") or n:find("creator") or n:find("ownername") then
+                return descendant.Value
+            end
+        end
+
+        return nil
+    end
+
+    -- Detect lokasi owned oleh player
+    local function autoDetectLocations()
+        print("[Teleport] scanning workspace for owned locations...")
+        local categoryMap = {}
+        for _, category in ipairs(LOCATION_CATEGORIES) do
+            categoryMap[category.category] = {}
+            for _, locationInfo in ipairs(category.locations) do
+                local found = false
+                for _, obj in pairs(workspace:GetDescendants()) do
+                    if found then break end
+                    if type(obj.Name) == "string" then
+                        for _, s in ipairs(locationInfo.searchNames) do
+                            if string.lower(obj.Name) == string.lower(s) or string.find(string.lower(obj.Name), string.lower(s), 1, true) then
+                                local targetPart = nil
+                                if obj:IsA("Model") then
+                                    targetPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                                elseif obj:IsA("BasePart") then
+                                    targetPart = obj
+                                end
+                                local ownerName = getOwnerNameOfInstance(obj) or (obj.Parent and getOwnerNameOfInstance(obj.Parent))
+                                if targetPart and targetPart:IsA("BasePart") and ownerName and tostring(ownerName) == tostring(player.Name) then
+                                    table.insert(categoryMap[category.category], {
+                                        name = locationInfo.name,
+                                        part = targetPart,
+                                        category = category.category,
+                                        originalName = obj.Name,
+                                        owner = ownerName
+                                    })
+                                    found = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return categoryMap
+    end
+
+    -- cek apakah posisi sedang dipakai pemain lain
+    local function isOccupied(position, radius)
+        radius = radius or PROXIMITY_CHECK_RADIUS
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= player and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") then
+                local hrp = pl.Character.HumanoidRootPart
+                if (hrp.Position - position).Magnitude <= radius then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    -- trigger ProximityPrompt aman
+    local function triggerProximityPromptAt(part)
+        if not part or not part.Parent then return false end
+        for _, prompt in ipairs(part.Parent:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") then
+                if isOccupied(prompt.Parent.Position, PROXIMITY_CHECK_RADIUS) then
+                    return false
+                end
+                pcall(function()
+                    prompt:InputHoldBegin()
+                    task.wait(prompt.HoldDuration or 0.5)
+                    prompt:InputHoldEnd()
+                end)
+                return true
+            end
+        end
+        for _, prompt in ipairs(part:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") then
+                if isOccupied(prompt.Parent.Position, PROXIMITY_CHECK_RADIUS) then
+                    return false
+                end
+                pcall(function()
+                    prompt:InputHoldBegin()
+                    task.wait(prompt.HoldDuration or 0.5)
+                    prompt:InputHoldEnd()
+                end)
+                return true
+            end
+        end
+        return false
+    end
+
+    -- teleport client-side (safe)
+    local function getPlayerRoot()
+        local c = player.Character
+        if c then return c:FindFirstChild("HumanoidRootPart") end
+        return nil
+    end
+
+    local function teleportToLocation(locationPart)
+        local playerRoot = getPlayerRoot()
+        if not playerRoot then return false, "no_root" end
+        if not locationPart or not locationPart:IsA("BasePart") then return false, "invalid_part" end
+
+        if isOccupied(locationPart.Position, 2.5) then
+            return false, "occupied"
+        end
+
+        for _, off in ipairs(SAFE_OFFSETS) do
+            local targetPosition = locationPart.Position + off
+            local ok = pcall(function() playerRoot.CFrame = CFrame.new(targetPosition) end)
+            task.wait(0.12)
+            if ok and (playerRoot.Position - targetPosition).Magnitude < 6 then
+                return true
+            end
+        end
+
+        return true
+    end
+
+    -- Inisialisasi lokasi
+    local LOCATIONS_MAP = autoDetectLocations()
+    local TOTAL_LOCATIONS = 0
+    for _, locs in pairs(LOCATIONS_MAP) do TOTAL_LOCATIONS = TOTAL_LOCATIONS + #locs end
+    print("[Teleport] owned locations found:", TOTAL_LOCATIONS)
+
+    -- state
+    local state = {
+        selectedLocations = {},
+        isRunning = false,
+        teleportDelay = 1,
+        autoPrompt = true,
+        currentIndex = 1,
+        isTeleporting = false
+    }
+
+    local function toggleLocation(location)
+        local found = false
+        for i, loc in ipairs(state.selectedLocations) do
+            if loc.name == location.name and loc.part == location.part and loc.category == location.category then
+                table.remove(state.selectedLocations, i)
+                found = true
+                break
+            end
+        end
+        if not found then table.insert(state.selectedLocations, location) end
+    end
+
+    local function startAutoTeleport(startButton)
+        if state.isRunning then return end
+        if #state.selectedLocations == 0 then
+            warn("Pilih minimal 1 lokasi terlebih dahulu.")
+            return
+        end
+        state.isRunning = true
+        state.isTeleporting = false
+        if startButton then
+            pcall(function()
+                startButton.BackgroundColor3 = Color3.fromRGB(100,100,100)
+                startButton.Text = "⏸ RUN"
+            end)
+        end
+
+        task.spawn(function()
+            while state.isRunning do
+                if #state.selectedLocations > 0 then
+                    local location = state.selectedLocations[state.currentIndex]
+                    if location and location.part and location.part.Parent then
+                        local ownerName = getOwnerNameOfInstance(location.part) or getOwnerNameOfInstance(location.part.Parent)
+                        if ownerName and tostring(ownerName) ~= tostring(player.Name) then
+                            warn("Lokasi bukan milik Anda lagi, melewatkan:", location.name)
+                        else
+                            if isOccupied(location.part.Position, PROXIMITY_CHECK_RADIUS) then
+                                print("Lokasi '"..location.name.."' sedang dipakai pemain lain, menunggu...")
+                                local waited = 0
+                                while state.isRunning and waited < OCCUPIED_TIMEOUT and isOccupied(location.part.Position, PROXIMITY_CHECK_RADIUS) do
+                                    task.wait(0.5)
+                                    waited = waited + 0.5
+                                end
+                                if isOccupied(location.part.Position, PROXIMITY_CHECK_RADIUS) then
+                                    print("Masih dipakai, melewatkan lokasi '"..location.name.."'")
+                                    goto advance_index
+                                end
+                            end
+
+                            state.isTeleporting = true
+                            local ok, reason = teleportToLocation(location.part)
+                            if ok then
+                                print("Teleport ke:", location.name)
+                                if state.autoPrompt then
+                                    local triggered = triggerProximityPromptAt(location.part)
+                                    if triggered then
+                                        print("ProximityPrompt triggered di:", location.name)
+                                    else
+                                        print("ProximityPrompt tidak ditemukan/aman di:", location.name)
+                                    end
+                                end
+                                task.wait(state.teleportDelay)
+                            else
+                                if reason == "occupied" then
+                                    print("Gagal teleport - lokasi terisi, melewatkan:", location.name)
+                                else
+                                    warn("Gagal teleport ke:", location.name, "(", reason, ")")
+                                end
+                            end
+                            state.isTeleporting = false
+                        end
+                    else
+                        warn("Lokasi tidak valid atau sudah dihapus:", (location and location.name) or "unknown")
+                    end
+                    ::advance_index::
+                    state.currentIndex = state.currentIndex + 1
+                    if state.currentIndex > #state.selectedLocations then
+                        state.currentIndex = 1
+                        print("🔄 Loop berulang...")
+                    end
+                else
+                    task.wait(0.5)
+                end
+                task.wait(0.1)
+            end
+
+            state.isTeleporting = false
+            state.isRunning = false
+            if startButton then
+                pcall(function()
+                    startButton.BackgroundColor3 = Color3.fromRGB(50,150,50)
+                    startButton.Text = "▶ START"
+                end)
+            end
+        end)
+    end
+
+    local function stopAutoTeleport(startButton)
+        state.isRunning = false
+        state.isTeleporting = false
+        if startButton then
+            pcall(function()
+                startButton.BackgroundColor3 = Color3.fromRGB(50,150,50)
+                startButton.Text = "▶ START"
+            end)
+        end
+        print("Teleport dihentikan.")
+    end
+
+    -- GUI sederhana (executor-friendly)
+    local function createGUI()
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "TeleportKiosExecutor"
+        screenGui.ResetOnSpawn = false
+
+        local parentOk = pcall(function()
+            screenGui.Parent = CoreGui
+            if type(syn) == "table" and type(syn.protect_gui) == "function" then
+                pcall(syn.protect_gui, screenGui)
+            end
+        end)
+        if not parentOk then
+            screenGui.Parent = player:WaitForChild("PlayerGui")
+        end
+
+        -- minimal UI: label + close
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(0, 300, 0, 38)
+        frame.Position = UDim2.new(0, 10, 0, 10)
+        frame.BackgroundColor3 = Color3.fromRGB(30,30,35)
+        frame.Parent = screenGui
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Parent = frame
+        lbl.Size = UDim2.new(1, -40, 1, 0)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "TeleportKios Executor - Ready (".. tostring(TOTAL_LOCATIONS) ..")"
+        lbl.TextColor3 = Color3.fromRGB(255, 200, 50)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 14
+
+        local closeBtn = Instance.new("TextButton")
+        closeBtn.Parent = frame
+        closeBtn.Size = UDim2.new(0, 32, 1, 0)
+        closeBtn.Position = UDim2.new(1, -36, 0, 0)
+        closeBtn.Text = "✕"
+        closeBtn.BackgroundColor3 = Color3.fromRGB(150,50,50)
+        closeBtn.Font = Enum.Font.GothamBold
+        closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+        closeBtn.MouseButton1Click:Connect(function()
+            state.isRunning = false
+            pcall(function() screenGui:Destroy() end)
+        end)
+
+        return screenGui
+    end
+
+    createGUI()
+    print("[Teleport] ready. Total lokasi ditemukan:", TOTAL_LOCATIONS)
+
+end, errHandler)
