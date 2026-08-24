@@ -1,0 +1,102 @@
+-- helper: toleran terhadap variasi atribut owner (OwnerId / Owner / string/number / username)
+local function isOwnedByMe(part)
+	if not part then return false end
+	local ownerIdAttr = part:GetAttribute and part:GetAttribute("OwnerId")
+	local ownerAttr = part:GetAttribute and part:GetAttribute("Owner")
+
+	if type(ownerIdAttr) == "number" and ownerIdAttr == me.UserId then return true end
+	if type(ownerIdAttr) == "string" then
+		local n = tonumber(ownerIdAttr)
+		if n and n == me.UserId then return true end
+	end
+
+	if type(ownerAttr) == "number" and ownerAttr == me.UserId then return true end
+	if type(ownerAttr) == "string" then
+		local n = tonumber(ownerAttr)
+		if n and n == me.UserId then return true end
+		if ownerAttr == me.Name then return true end
+	end
+
+	return false
+end
+
+-- ganti fungsi myPlots lama dengan ini (mendukung BasePart atau Model dan pengecekan toleran)
+local function myPlots()
+	local lp = workspace:FindFirstChild("LahanPlot")
+	if not lp then return {} end
+	local out = {}
+	for _, c in ipairs(lp:GetChildren()) do
+		-- terima BasePart atau Model (beberapa game memakai model untuk plot)
+		if (c:IsA("BasePart") or c:IsA("Model")) and isOwnedByMe(c) then
+			out[#out + 1] = c
+		end
+	end
+	return out
+end
+
+-- modifikasi waterPlants: gunakan isOwnedByMe daripada cek OwnerId eksklusif
+local function waterPlants()
+	local penyiram = findTool("PenyiramTanaman")
+	if not penyiram then return "no_tool" end
+	equipTool(penyiram)
+
+	local watered = 0
+	local lp = workspace:FindFirstChild("LahanPlot")
+	if lp then
+		for _, d in ipairs(lp:GetDescendants()) do
+			if not STATE.alive() then break end
+			if d:IsA("BasePart") and isOwnedByMe(d) and d:GetAttribute("PlantKey") then
+				local wet = d:GetAttribute("Wet") == true
+				local airSisa = tonumber(d:GetAttribute("AirSisa")) or 0
+				local airMax = tonumber(d:GetAttribute("AirMax")) or 0
+				if not wet or (airMax > 0 and airSisa < airMax) then
+					moveTo(d.Position + Vector3.new(0, 1, 0), Options.WarpDist.Value)
+					task.wait(0.3)
+					local Siram = game.ReplicatedStorage.Remotes:FindFirstChild("Siram")
+					if Siram then
+						for i = 1, 6 do
+							if not STATE.alive() then break end
+							pcall(function() Siram:FireServer() end)
+							task.wait(0.25 + math.random() * 0.15)
+						end
+						watered = watered + 1
+					end
+					task.wait(0.5 + math.random() * 0.5)
+				end
+			end
+		end
+	end
+	return watered > 0 and "watered" or "done"
+end
+
+-- modifikasi harvestPlants: gunakan isOwnedByMe daripada cek OwnerId eksklusif
+local function harvestPlants()
+	local lp = workspace:FindFirstChild("LahanPlot")
+	if not lp then return "no_plot" end
+	local harvested = 0
+	local Panen = game.ReplicatedStorage.Remotes:FindFirstChild("Panen")
+	if not Panen then return "no_remote" end
+	for _, d in ipairs(lp:GetDescendants()) do
+		if not STATE.alive() then break end
+		if d:IsA("BasePart") and isOwnedByMe(d) and d:GetAttribute("PlantKey") then
+			local ready = d:GetAttribute("Ready") == true
+			local harvestedFlag = d:GetAttribute("Harvested") == true
+			if ready and not harvestedFlag then
+				local char = getCharacter()
+				if not char then break end
+				local hrp = char:FindFirstChild("HumanoidRootPart")
+				if not hrp then break end
+				moveTo(d.Position + Vector3.new(0, 1, 0), Options.WarpDist.Value)
+				task.wait(0.3)
+				local ok = pcall(function()
+					Panen:FireServer(d)
+				end)
+				if ok then
+					harvested = harvested + 1
+				end
+				task.wait(0.5 + math.random() * 0.5)
+			end
+		end
+	end
+	return harvested > 0 and "panen" or "none"
+end
