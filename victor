@@ -1,0 +1,631 @@
+-- ============================================
+-- AUTO TELEPORT + AUTO SWING SCRIPT
+-- Devil's Market Roblox
+-- ============================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local Player = Players.LocalPlayer
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+-- ============================================
+-- VARIABLES
+-- ============================================
+
+local Config = {
+    -- Teleport Settings
+    TeleportEnabled = false,
+    TeleportDelay = 2,
+    SelectedLocations = {
+        BatuBesar = false,
+        PohonBesar = false,
+    },
+    
+    -- Proximity/Auto Swing Settings
+    SwingEnabled = false,
+    ProximityDistance = {
+        PohonBesar = 9,
+        BatuBesar = 13,
+    },
+    HoldDuration = 0.3,
+}
+
+local GUI_State = {
+    Dragging = false,
+    DragStart = Vector2.new(),
+    MainOffset = Vector2.new(),
+    Minimized = false,
+}
+
+-- ============================================
+-- FUNCTIONS: TELEPORT
+-- ============================================
+
+local function GetTeleportLocations()
+    local workspace = game:GetService("Workspace")
+    local locations = {}
+    
+    local bahanCraft = workspace:FindFirstChild("BahanCraft")
+    if bahanCraft then
+        local batuBesar = bahanCraft:FindFirstChild("BatuBesar")
+        local pohonBesar = bahanCraft:FindFirstChild("PohonBesar")
+        
+        if batuBesar then
+            locations.BatuBesar = batuBesar
+        end
+        if pohonBesar then
+            locations.PohonBesar = pohonBesar
+        end
+    end
+    
+    return locations
+end
+
+local function TeleportToLocation(location)
+    if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
+    if not location or not location:FindFirstChild("HumanoidRootPart") then return end
+    
+    local targetPos = location.HumanoidRootPart.Position + Vector3.new(math.random(-5, 5), 3, math.random(-5, 5))
+    Character:MoveTo(targetPos)
+end
+
+local function AutoTeleport()
+    while Config.TeleportEnabled do
+        local locations = GetTeleportLocations()
+        
+        if Config.SelectedLocations.BatuBesar and locations.BatuBesar then
+            TeleportToLocation(locations.BatuBesar)
+            task.wait(Config.TeleportDelay)
+        end
+        
+        if Config.SelectedLocations.PohonBesar and locations.PohonBesar then
+            TeleportToLocation(locations.PohonBesar)
+            task.wait(Config.TeleportDelay)
+        end
+        
+        task.wait(0.1)
+    end
+end
+
+-- ============================================
+-- FUNCTIONS: AUTO SWING
+-- ============================================
+
+local function GetNearbyResources()
+    local workspace = game:GetService("Workspace")
+    local bahanCraft = workspace:FindFirstChild("BahanCraft")
+    local nearbyResources = {}
+    
+    if not Character or not Character:FindFirstChild("HumanoidRootPart") then
+        return nearbyResources
+    end
+    
+    local playerPos = Character.HumanoidRootPart.Position
+    
+    if bahanCraft then
+        for _, resource in ipairs(bahanCraft:GetChildren()) do
+            if resource:IsA("Model") and resource:FindFirstChild("HumanoidRootPart") then
+                local resourcePos = resource.HumanoidRootPart.Position
+                local distance = (playerPos - resourcePos).Magnitude
+                
+                if resource.Name == "PohonBesar" and distance <= Config.ProximityDistance.PohonBesar then
+                    table.insert(nearbyResources, {name = "PohonBesar", distance = distance, model = resource})
+                elseif resource.Name == "BatuBesar" and distance <= Config.ProximityDistance.BatuBesar then
+                    table.insert(nearbyResources, {name = "BatuBesar", distance = distance, model = resource})
+                end
+            end
+        end
+    end
+    
+    return nearbyResources
+end
+
+local function GetEquippedTool()
+    if not Character then return nil end
+    
+    for _, item in ipairs(Character:GetChildren()) do
+        if item:IsA("Tool") and item:GetAttribute("AlatTambang") then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+local function ActivateToolSwing(tool)
+    if not tool or not tool:FindFirstChild("Handle") then return end
+    
+    -- Coba activate tool
+    if tool:FindFirstChild("Activated") then
+        tool.Activated:Fire()
+    elseif tool:GetAttribute("Activated") then
+        tool:SetAttribute("Activated", true)
+    else
+        -- Fallback: buat event manual
+        local event = Instance.new("StringValue")
+        event.Name = "toolanim"
+        event.Value = "Slash"
+        event.Parent = tool
+        game:GetService("Debris"):AddItem(event, 0.5)
+    end
+end
+
+local function AutoSwing()
+    while Config.SwingEnabled do
+        local nearbyResources = GetNearbyResources()
+        
+        if #nearbyResources > 0 then
+            local tool = GetEquippedTool()
+            
+            if tool then
+                -- Swing otomatis
+                ActivateToolSwing(tool)
+                task.wait(Config.HoldDuration)
+            else
+                task.wait(0.5)
+            end
+        else
+            task.wait(0.5)
+        end
+    end
+end
+
+-- ============================================
+-- GUI FUNCTIONS
+-- ============================================
+
+local function CreateMainGui()
+    local screenSize = PlayerGui.AbsoluteSize
+    
+    -- Main Frame
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "AutoTeleportSwingGUI"
+    mainFrame.Size = UDim2.new(0, 320, 0, 500)
+    mainFrame.Position = UDim2.new(0, 20, 0, 20)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.ZIndex = 100
+    mainFrame.Parent = PlayerGui
+    
+    -- Corner Radius
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.CornerRadius = UDim.new(0, 8)
+    uiCorner.Parent = mainFrame
+    
+    -- Title Bar (Draggable)
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 40)
+    titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = mainFrame
+    
+    local titleBarCorner = Instance.new("UICorner")
+    titleBarCorner.CornerRadius = UDim.new(0, 8)
+    titleBarCorner.Parent = titleBar
+    
+    -- Title Text
+    local titleText = Instance.new("TextLabel")
+    titleText.Name = "Title"
+    titleText.Size = UDim2.new(1, -80, 1, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleText.TextSize = 16
+    titleText.Font = Enum.Font.GothamBold
+    titleText.Text = "Auto Teleport & Swing"
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.Parent = titleBar
+    
+    -- Close Button
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Name = "CloseBtn"
+    closeBtn.Size = UDim2.new(0, 35, 0, 35)
+    closeBtn.Position = UDim2.new(1, -40, 0, 2)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 20
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.Text = "✕"
+    closeBtn.BorderSizePixel = 0
+    closeBtn.Parent = titleBar
+    
+    local closeBtnCorner = Instance.new("UICorner")
+    closeBtnCorner.CornerRadius = UDim.new(0, 5)
+    closeBtnCorner.Parent = closeBtn
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        mainFrame:Destroy()
+    end)
+    
+    -- Minimize Button
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Name = "MinimizeBtn"
+    minimizeBtn.Size = UDim2.new(0, 35, 0, 35)
+    minimizeBtn.Position = UDim2.new(1, -80, 0, 2)
+    minimizeBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    minimizeBtn.TextSize = 20
+    minimizeBtn.Font = Enum.Font.GothamBold
+    minimizeBtn.Text = "−"
+    minimizeBtn.BorderSizePixel = 0
+    minimizeBtn.Parent = titleBar
+    
+    local minimizeBtnCorner = Instance.new("UICorner")
+    minimizeBtnCorner.CornerRadius = UDim.new(0, 5)
+    minimizeBtnCorner.Parent = minimizeBtn
+    
+    -- Content Frame (Scrollable)
+    local contentFrame = Instance.new("ScrollingFrame")
+    contentFrame.Name = "Content"
+    contentFrame.Size = UDim2.new(1, 0, 1, -40)
+    contentFrame.Position = UDim2.new(0, 0, 0, 40)
+    contentFrame.BackgroundTransparency = 1
+    contentFrame.BorderSizePixel = 0
+    contentFrame.ScrollBarThickness = 6
+    contentFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+    contentFrame.CanvasSize = UDim2.new(0, 0, 0, 600)
+    contentFrame.Parent = mainFrame
+    
+    -- UIList Layout untuk konten
+    local uiListLayout = Instance.new("UIListLayout")
+    uiListLayout.Padding = UDim.new(0, 10)
+    uiListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    uiListLayout.Parent = contentFrame
+    
+    -- ============================================
+    -- TELEPORT SECTION
+    -- ============================================
+    
+    local teleportSection = Instance.new("Frame")
+    teleportSection.Name = "TeleportSection"
+    teleportSection.Size = UDim2.new(0, 300, 0, 160)
+    teleportSection.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    teleportSection.BorderSizePixel = 0
+    teleportSection.Parent = contentFrame
+    
+    local sectionCorner = Instance.new("UICorner")
+    sectionCorner.CornerRadius = UDim.new(0, 6)
+    sectionCorner.Parent = teleportSection
+    
+    local teleportLabel = Instance.new("TextLabel")
+    teleportLabel.Size = UDim2.new(1, -10, 0, 25)
+    teleportLabel.Position = UDim2.new(0, 5, 0, 5)
+    teleportLabel.BackgroundTransparency = 1
+    teleportLabel.TextColor3 = Color3.fromRGB(255, 200, 87)
+    teleportLabel.TextSize = 14
+    teleportLabel.Font = Enum.Font.GothamBold
+    teleportLabel.Text = "📍 TELEPORT SETTINGS"
+    teleportLabel.TextXAlignment = Enum.TextXAlignment.Left
+    teleportLabel.Parent = teleportSection
+    
+    -- Toggle Teleport
+    local teleportToggle = Instance.new("TextButton")
+    teleportToggle.Name = "TeleportToggle"
+    teleportToggle.Size = UDim2.new(0, 280, 0, 30)
+    teleportToggle.Position = UDim2.new(0, 10, 0, 35)
+    teleportToggle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    teleportToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    teleportToggle.TextSize = 13
+    teleportToggle.Font = Enum.Font.Gotham
+    teleportToggle.Text = "⚪ Teleport OFF"
+    teleportToggle.BorderSizePixel = 0
+    teleportToggle.Parent = teleportSection
+    
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(0, 5)
+    toggleCorner.Parent = teleportToggle
+    
+    local function UpdateTeleportToggle()
+        if Config.TeleportEnabled then
+            teleportToggle.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+            teleportToggle.Text = "🟢 Teleport ON"
+        else
+            teleportToggle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            teleportToggle.Text = "⚪ Teleport OFF"
+        end
+    end
+    
+    teleportToggle.MouseButton1Click:Connect(function()
+        Config.TeleportEnabled = not Config.TeleportEnabled
+        UpdateTeleportToggle()
+        
+        if Config.TeleportEnabled then
+            task.spawn(AutoTeleport)
+        end
+    end)
+    
+    -- Delay Slider
+    local delayLabel = Instance.new("TextLabel")
+    delayLabel.Size = UDim2.new(1, -20, 0, 20)
+    delayLabel.Position = UDim2.new(0, 10, 0, 70)
+    delayLabel.BackgroundTransparency = 1
+    delayLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    delayLabel.TextSize = 12
+    delayLabel.Font = Enum.Font.Gotham
+    delayLabel.Text = "Jeda (Delay): " .. Config.TeleportDelay .. "s"
+    delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+    delayLabel.Parent = teleportSection
+    
+    local delaySlider = Instance.new("Frame")
+    delaySlider.Size = UDim2.new(0, 280, 0, 5)
+    delaySlider.Position = UDim2.new(0, 10, 0, 95)
+    delaySlider.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    delaySlider.BorderSizePixel = 0
+    delaySlider.Parent = teleportSection
+    
+    local sliderFill = Instance.new("Frame")
+    sliderFill.Size = UDim2.new((Config.TeleportDelay - 1) / 19, 0, 1, 0)
+    sliderFill.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+    sliderFill.BorderSizePixel = 0
+    sliderFill.Parent = delaySlider
+    
+    local sliderCorner = Instance.new("UICorner")
+    sliderCorner.CornerRadius = UDim.new(0, 2)
+    sliderCorner.Parent = sliderFill
+    
+    local sliderButton = Instance.new("TextButton")
+    sliderButton.Size = UDim2.new(0, 15, 0, 15)
+    sliderButton.Position = UDim2.new((Config.TeleportDelay - 1) / 19, -7, 0.5, -7)
+    sliderButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    sliderButton.BorderSizePixel = 0
+    sliderButton.Text = ""
+    sliderButton.Parent = delaySlider
+    
+    local sliderBtnCorner = Instance.new("UICorner")
+    sliderBtnCorner.CornerRadius = UDim.new(0, 7)
+    sliderBtnCorner.Parent = sliderButton
+    
+    local sliderDragging = false
+    
+    sliderButton.MouseButton1Down:Connect(function()
+        sliderDragging = true
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            sliderDragging = false
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input, gameProcessed)
+        if sliderDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local mousePos = UserInputService:GetMouseLocation()
+            local sliderPos = delaySlider.AbsolutePosition.X
+            local sliderSize = delaySlider.AbsoluteSize.X
+            local percent = math.clamp((mousePos.X - sliderPos) / sliderSize, 0, 1)
+            
+            Config.TeleportDelay = math.floor(percent * 19) + 1
+            delayLabel.Text = "Jeda (Delay): " .. Config.TeleportDelay .. "s"
+            sliderFill.Size = UDim2.new(percent, 0, 1, 0)
+            sliderButton.Position = UDim2.new(percent, -7, 0.5, -7)
+        end
+    end)
+    
+    -- Location Checkboxes
+    local locationsFrame = Instance.new("Frame")
+    locationsFrame.Size = UDim2.new(0, 280, 0, 45)
+    locationsFrame.Position = UDim2.new(0, 10, 0, 110)
+    locationsFrame.BackgroundTransparency = 1
+    locationsFrame.Parent = teleportSection
+    
+    local function CreateCheckbox(name, label, position, configKey)
+        local checkbox = Instance.new("TextButton")
+        checkbox.Size = UDim2.new(0, 130, 0, 20)
+        checkbox.Position = position
+        checkbox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        checkbox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        checkbox.TextSize = 12
+        checkbox.Font = Enum.Font.Gotham
+        checkbox.Text = "☐ " .. label
+        checkbox.BorderSizePixel = 0
+        checkbox.Parent = locationsFrame
+        
+        local cbCorner = Instance.new("UICorner")
+        cbCorner.CornerRadius = UDim.new(0, 4)
+        cbCorner.Parent = checkbox
+        
+        local function UpdateCheckbox()
+            if Config.SelectedLocations[configKey] then
+                checkbox.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+                checkbox.Text = "☑ " .. label
+            else
+                checkbox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                checkbox.Text = "☐ " .. label
+            end
+        end
+        
+        checkbox.MouseButton1Click:Connect(function()
+            Config.SelectedLocations[configKey] = not Config.SelectedLocations[configKey]
+            UpdateCheckbox()
+        end)
+        
+        UpdateCheckbox()
+    end
+    
+    CreateCheckbox("BatuBesar", "Batu Besar", UDim2.new(0, 0, 0, 0), "BatuBesar")
+    CreateCheckbox("PohonBesar", "Pohon Besar", UDim2.new(0, 140, 0, 0), "PohonBesar")
+    
+    -- ============================================
+    -- SWING SECTION
+    -- ============================================
+    
+    local swingSection = Instance.new("Frame")
+    swingSection.Name = "SwingSection"
+    swingSection.Size = UDim2.new(0, 300, 0, 180)
+    swingSection.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    swingSection.BorderSizePixel = 0
+    swingSection.Parent = contentFrame
+    
+    local swingSectionCorner = Instance.new("UICorner")
+    swingSectionCorner.CornerRadius = UDim.new(0, 6)
+    swingSectionCorner.Parent = swingSection
+    
+    local swingLabel = Instance.new("TextLabel")
+    swingLabel.Size = UDim2.new(1, -10, 0, 25)
+    swingLabel.Position = UDim2.new(0, 5, 0, 5)
+    swingLabel.BackgroundTransparency = 1
+    swingLabel.TextColor3 = Color3.fromRGB(255, 152, 0)
+    swingLabel.TextSize = 14
+    swingLabel.Font = Enum.Font.GothamBold
+    swingLabel.Text = "⚔ PROXIMITY SWING"
+    swingLabel.TextXAlignment = Enum.TextXAlignment.Left
+    swingLabel.Parent = swingSection
+    
+    -- Toggle Swing
+    local swingToggle = Instance.new("TextButton")
+    swingToggle.Name = "SwingToggle"
+    swingToggle.Size = UDim2.new(0, 280, 0, 30)
+    swingToggle.Position = UDim2.new(0, 10, 0, 35)
+    swingToggle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    swingToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    swingToggle.TextSize = 13
+    swingToggle.Font = Enum.Font.Gotham
+    swingToggle.Text = "⚪ Swing OFF"
+    swingToggle.BorderSizePixel = 0
+    swingToggle.Parent = swingSection
+    
+    local swingToggleCorner = Instance.new("UICorner")
+    swingToggleCorner.CornerRadius = UDim.new(0, 5)
+    swingToggleCorner.Parent = swingToggle
+    
+    local function UpdateSwingToggle()
+        if Config.SwingEnabled then
+            swingToggle.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+            swingToggle.Text = "🟢 Swing ON"
+        else
+            swingToggle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            swingToggle.Text = "⚪ Swing OFF"
+        end
+    end
+    
+    swingToggle.MouseButton1Click:Connect(function()
+        Config.SwingEnabled = not Config.SwingEnabled
+        UpdateSwingToggle()
+        
+        if Config.SwingEnabled then
+            task.spawn(AutoSwing)
+        end
+    end)
+    
+    -- Proximity Distance Labels
+    local proximityLabel1 = Instance.new("TextLabel")
+    proximityLabel1.Size = UDim2.new(1, -20, 0, 18)
+    proximityLabel1.Position = UDim2.new(0, 10, 0, 70)
+    proximityLabel1.BackgroundTransparency = 1
+    proximityLabel1.TextColor3 = Color3.fromRGB(200, 200, 200)
+    proximityLabel1.TextSize = 11
+    proximityLabel1.Font = Enum.Font.Gotham
+    proximityLabel1.Text = "Pohon: " .. Config.ProximityDistance.PohonBesar .. "st"
+    proximityLabel1.TextXAlignment = Enum.TextXAlignment.Left
+    proximityLabel1.Parent = swingSection
+    
+    local proximityLabel2 = Instance.new("TextLabel")
+    proximityLabel2.Size = UDim2.new(1, -20, 0, 18)
+    proximityLabel2.Position = UDim2.new(0, 10, 0, 90)
+    proximityLabel2.BackgroundTransparency = 1
+    proximityLabel2.TextColor3 = Color3.fromRGB(200, 200, 200)
+    proximityLabel2.TextSize = 11
+    proximityLabel2.Font = Enum.Font.Gotham
+    proximityLabel2.Text = "Batu: " .. Config.ProximityDistance.BatuBesar .. "st"
+    proximityLabel2.TextXAlignment = Enum.TextXAlignment.Left
+    proximityLabel2.Parent = swingSection
+    
+    local holdLabel = Instance.new("TextLabel")
+    holdLabel.Size = UDim2.new(1, -20, 0, 18)
+    holdLabel.Position = UDim2.new(0, 10, 0, 110)
+    holdLabel.BackgroundTransparency = 1
+    holdLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    holdLabel.TextSize = 11
+    holdLabel.Font = Enum.Font.Gotham
+    holdLabel.Text = "Hold Duration: " .. Config.HoldDuration .. "s"
+    holdLabel.TextXAlignment = Enum.TextXAlignment.Left
+    holdLabel.Parent = swingSection
+    
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, -20, 0, 20)
+    statusLabel.Position = UDim2.new(0, 10, 0, 155)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+    statusLabel.TextSize = 11
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.Text = "Status: Idle"
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel.Parent = swingSection
+    
+    -- Update status
+    RunService.Heartbeat:Connect(function()
+        if Config.SwingEnabled then
+            local nearbyResources = GetNearbyResources()
+            if #nearbyResources > 0 then
+                statusLabel.Text = "Status: Swinging (" .. #nearbyResources .. " nearby)"
+                statusLabel.TextColor3 = Color3.fromRGB(76, 175, 80)
+            else
+                statusLabel.Text = "Status: Waiting..."
+                statusLabel.TextColor3 = Color3.fromRGB(255, 200, 87)
+            end
+        else
+            statusLabel.Text = "Status: Disabled"
+            statusLabel.TextColor3 = Color3.fromRGB(200, 50, 50)
+        end
+    end)
+    
+    -- ============================================
+    -- DRAGGING FUNCTIONALITY
+    -- ============================================
+    
+    titleBar.InputBegan:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            GUI_State.Dragging = true
+            GUI_State.DragStart = UserInputService:GetMouseLocation()
+            GUI_State.MainOffset = mainFrame.Position
+        end
+    end)
+    
+    titleBar.InputEnded:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            GUI_State.Dragging = false
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input, gameProcessed)
+        if GUI_State.Dragging and input.UserInputType == Enum.UserInputType.MouseMovement and not GUI_State.Minimized then
+            local mouseDelta = UserInputService:GetMouseLocation() - GUI_State.DragStart
+            mainFrame.Position = GUI_State.MainOffset + UDim2.new(0, mouseDelta.X, 0, mouseDelta.Y)
+        end
+    end)
+    
+    minimizeBtn.MouseButton1Click:Connect(function()
+        GUI_State.Minimized = not GUI_State.Minimized
+        
+        if GUI_State.Minimized then
+            contentFrame.Visible = false
+            mainFrame.Size = UDim2.new(0, 320, 0, 40)
+            minimizeBtn.Text = "+"
+        else
+            contentFrame.Visible = true
+            mainFrame.Size = UDim2.new(0, 320, 0, 500)
+            minimizeBtn.Text = "−"
+        end
+    end)
+    
+    UpdateTeleportToggle()
+    UpdateSwingToggle()
+end
+
+-- ============================================
+-- CHARACTER RESPAWN HANDLER
+-- ============================================
+
+Player.CharacterAdded:Connect(function(newCharacter)
+    Character = newCharacter
+end)
+
+-- ============================================
+-- INITIALIZE
+-- ============================================
+
+CreateMainGui()
