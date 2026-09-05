@@ -1,0 +1,636 @@
+-- AutoFarmGUI_Merged_v3.lua
+-- NGepet (tema: hitam) — gabungan SpawnBahan + BahanCraft
+-- Perubahan: HAPUS mode jeda acak; hanya JEDA TETAP (1-20 detik). Teleport hanya ke part terdekat per sumber.
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local spawnFolderA = workspace:FindFirstChild("SpawnBahan") -- sumber lama (spawn items)
+local spawnFolderB = workspace:FindFirstChild("BahanCraft")  -- sumber baru (folder besar seperti BatuBesar, PohonBesar)
+
+-- ==========================================
+-- KONFIGURASI
+-- ==========================================
+local HEIGHT = 3
+local TELEPORT_FIXED = 2 -- default jeda tetap (detik)
+
+-- materials: displayName -> info { kind = "spawn"|"folder", key = identifier used in workspace }
+local materials = {
+    ["Jamur Kuburan"] = { kind = "spawn", key = "Spawn_JamurKuburan" },
+    ["Melati"]         = { kind = "spawn", key = "Spawn_Melati" },
+    ["Gagak"]          = { kind = "spawn", key = "Spawn_Gagak" },
+    ["Kepiting Sungai"]= { kind = "spawn", key = "Spawn_KepitingSungai" },
+    ["Dupa"]           = { kind = "spawn", key = "Spawn_Dupa" },
+    ["Kemenyan"]       = { kind = "spawn", key = "Spawn_Kemenyan" },
+    ["Batu Besar"]     = { kind = "folder", key = "BatuBesar" },
+    ["Pohon Besar"]    = { kind = "folder", key = "PohonBesar" }
+}
+
+-- order: array of keys (identifier strings) in the desired teleport order
+local materialOrder = {
+    "Spawn_JamurKuburan",
+    "Spawn_Melati",
+    "Spawn_Gagak",
+    "Spawn_KepitingSungai",
+    "Spawn_Dupa",
+    "Spawn_Kemenyan",
+    "BatuBesar",
+    "PohonBesar"
+}
+
+-- build a reverse map key -> displayName for UI labeling
+local keyToDisplay = {}
+for display, info in pairs(materials) do
+    keyToDisplay[info.key] = display
+end
+
+local selectedMaterials = {}
+for _, key in pairs(materialOrder) do
+    selectedMaterials[key] = true
+end
+
+local autoTeleport = false
+local autoPrompt = false
+local minimized = false
+
+-- ==========================================
+-- HAPUS GUI LAMA
+-- ==========================================
+local oldGui = playerGui:FindFirstChild("AutoFarmGUI")
+if oldGui then
+    oldGui:Destroy()
+end
+
+-- ==========================================
+-- SCREEN GUI
+-- ==========================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoFarmGUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+-- ==========================================
+-- FRAME UTAMA (tema hitam)
+-- ==========================================
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(360, 480)
+main.Position = UDim2.new(0.5, -180, 0.5, -240)
+main.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+main.BorderSizePixel = 0
+main.Parent = gui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 12)
+mainCorner.Parent = main
+
+-- ==========================================
+-- HEADER (handle drag)
+-- ==========================================
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 44)
+header.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+header.BorderSizePixel = 0
+header.Parent = main
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 12)
+headerCorner.Parent = header
+
+header.Active = true
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.fromOffset(15, 0)
+title.BackgroundTransparency = 1
+title.Text = "NGepet by.SAPIGANTENG"
+title.TextColor3 = Color3.fromRGB(230, 230, 230)
+title.TextSize = 17
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local minimize = Instance.new("TextButton")
+minimize.Size = UDim2.fromOffset(32, 28)
+minimize.Position = UDim2.new(1, -84, 0, 8)
+minimize.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+minimize.Text = "▢"
+minimize.TextColor3 = Color3.fromRGB(220, 220, 220)
+minimize.TextSize = 16
+minimize.Font = Enum.Font.GothamBold
+minimize.Parent = header
+
+local minimizeCorner = Instance.new("UICorner")
+minimizeCorner.CornerRadius = UDim.new(0, 6)
+minimizeCorner.Parent = minimize
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(32, 28)
+close.Position = UDim2.new(1, -44, 0, 8)
+close.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
+close.Text = "X"
+close.TextColor3 = Color3.new(1, 1, 1)
+close.TextSize = 15
+close.Font = Enum.Font.GothamBold
+close.Parent = header
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = close
+
+close.MouseButton1Click:Connect(function()
+    autoTeleport = false
+    autoPrompt = false
+    gui:Destroy()
+end)
+
+-- ==========================================
+-- CONTENT
+-- ==========================================
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, 0, 1, -44)
+content.Position = UDim2.fromOffset(0, 44)
+content.BackgroundTransparency = 1
+content.Parent = main
+
+-- common small text settings
+local function applySmallLabel(lbl)
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.BackgroundTransparency = 1
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+-- ==========================================
+-- BAHAN LABEL
+-- ==========================================
+local materialLabel = Instance.new("TextLabel")
+materialLabel.Size = UDim2.new(1, -30, 0, 22)
+materialLabel.Position = UDim2.fromOffset(15, 8)
+applySmallLabel(materialLabel)
+materialLabel.Text = "Pilih bahan:"
+materialLabel.Parent = content
+
+-- ==========================================
+-- PILIH / HAPUS SEMUA (rapi)
+-- ==========================================
+local selectAll = Instance.new("TextButton")
+selectAll.Size = UDim2.new(0.48, -10, 0, 30)
+selectAll.Position = UDim2.fromOffset(15, 34)
+selectAll.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+selectAll.Text = "PILIH SEMUA"
+selectAll.TextColor3 = Color3.fromRGB(230, 230, 230)
+selectAll.TextSize = 12
+selectAll.Font = Enum.Font.GothamBold
+selectAll.Parent = content
+local selectCorner = Instance.new("UICorner")
+selectCorner.CornerRadius = UDim.new(0, 6)
+selectCorner.Parent = selectAll
+
+local clearAll = Instance.new("TextButton")
+clearAll.Size = UDim2.new(0.48, -10, 0, 30)
+clearAll.Position = UDim2.new(0.5, 5, 0, 34)
+clearAll.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+clearAll.Text = "HAPUS SEMUA"
+clearAll.TextColor3 = Color3.fromRGB(230, 230, 230)
+clearAll.TextSize = 12
+clearAll.Font = Enum.Font.GothamBold
+clearAll.Parent = content
+local clearCorner = Instance.new("UICorner")
+clearCorner.CornerRadius = UDim.new(0, 6)
+clearCorner.Parent = clearAll
+
+-- ==========================================
+-- LIST BAHAN
+-- ==========================================
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.new(1, -30, 0, 240)
+list.Position = UDim2.fromOffset(15, 74)
+list.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 6
+list.CanvasSize = UDim2.new(0, 0, 0, 0)
+list.Parent = content
+
+local listCorner = Instance.new("UICorner")
+listCorner.CornerRadius = UDim.new(0, 8)
+listCorner.Parent = list
+
+local listPadding = Instance.new("UIPadding")
+listPadding.PaddingTop = UDim.new(0, 6)
+listPadding.PaddingLeft = UDim.new(0, 6)
+listPadding.PaddingRight = UDim.new(0, 6)
+listPadding.Parent = list
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 6)
+layout.Parent = list
+
+-- ==========================================
+-- CHECKBOX LIST
+-- ==========================================
+local checkboxButtons = {}
+
+local function createCheckbox(displayName, spawnKey)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 0, 32)
+    button.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    button.TextColor3 = Color3.fromRGB(230, 230, 230)
+    button.TextSize = 12
+    button.Font = Enum.Font.Gotham
+    button.TextXAlignment = Enum.TextXAlignment.Left
+    button.Parent = list
+
+    checkboxButtons[spawnKey] = button
+
+    local function update()
+        if selectedMaterials[spawnKey] then
+            button.Text = "☑  " .. displayName
+            button.BackgroundColor3 = Color3.fromRGB(30, 90, 55)
+        else
+            button.Text = "☐  " .. displayName
+            button.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+        end
+    end
+
+    button.MouseButton1Click:Connect(function()
+        selectedMaterials[spawnKey] = not selectedMaterials[spawnKey]
+        update()
+    end)
+
+    update()
+end
+
+for _, key in ipairs(materialOrder) do
+    local display = keyToDisplay[key] or key
+    createCheckbox(display, key)
+end
+
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+end)
+
+local function updateAllCheckboxes()
+    for _, key in ipairs(materialOrder) do
+        local button = checkboxButtons[key]
+        local display = keyToDisplay[key] or key
+        if button then
+            if selectedMaterials[key] then
+                button.Text = "☑  " .. display
+                button.BackgroundColor3 = Color3.fromRGB(30, 90, 55)
+            else
+                button.Text = "☐  " .. display
+                button.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+            end
+        end
+    end
+end
+
+selectAll.MouseButton1Click:Connect(function()
+    for _, key in pairs(materialOrder) do
+        selectedMaterials[key] = true
+    end
+    updateAllCheckboxes()
+end)
+
+clearAll.MouseButton1Click:Connect(function()
+    for _, key in pairs(materialOrder) do
+        selectedMaterials[key] = false
+    end
+    updateAllCheckboxes()
+end)
+
+-- ==========================================
+-- PENGATUR JEDA TELEPORT (HANYA TETAP)
+-- ==========================================
+local fixedLabel = Instance.new("TextLabel")
+fixedLabel.Size = UDim2.new(0.5, -10, 0, 22)
+fixedLabel.Position = UDim2.fromOffset(15, 328)
+applySmallLabel(fixedLabel)
+fixedLabel.Text = "Jeda Teleport (detik):"
+fixedLabel.Parent = content
+
+local fixedDropdown = Instance.new("TextButton")
+fixedDropdown.Size = UDim2.new(0.45, -10, 0, 28)
+fixedDropdown.Position = UDim2.new(0.5, 5, 0, 324)
+fixedDropdown.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+fixedDropdown.Text = tostring(TELEPORT_FIXED) .. " Detik ▼"
+fixedDropdown.TextColor3 = Color3.fromRGB(230, 230, 230)
+fixedDropdown.TextSize = 12
+fixedDropdown.Font = Enum.Font.GothamBold
+fixedDropdown.Parent = content
+fixedDropdown.AutoButtonColor = true
+
+local fixedCorner = Instance.new("UICorner")
+fixedCorner.CornerRadius = UDim.new(0, 6)
+fixedCorner.Parent = fixedDropdown
+
+local fixedList = Instance.new("ScrollingFrame")
+fixedList.Size = UDim2.fromOffset(160, 200)
+fixedList.Position = UDim2.new(1, -175, 0, 358)
+fixedList.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
+fixedList.BorderSizePixel = 0
+fixedList.ScrollBarThickness = 5
+fixedList.Visible = false
+fixedList.ZIndex = 100
+fixedList.CanvasSize = UDim2.new(0, 0, 0, 0)
+fixedList.Parent = content
+
+local fixedListCorner = Instance.new("UICorner")
+fixedListCorner.CornerRadius = UDim.new(0, 6)
+fixedListCorner.Parent = fixedList
+
+local fixedLayout = Instance.new("UIListLayout")
+fixedLayout.Padding = UDim.new(0, 2)
+fixedLayout.Parent = fixedList
+
+for i = 1, 20 do
+    local option = Instance.new("TextButton")
+    option.Size = UDim2.new(1, -8, 0, 28)
+    option.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    option.Text = tostring(i) .. " Detik"
+    option.TextColor3 = Color3.fromRGB(230, 230, 230)
+    option.TextSize = 12
+    option.Font = Enum.Font.Gotham
+    option.ZIndex = 101
+    option.Parent = fixedList
+
+    local optionCorner = Instance.new("UICorner")
+    optionCorner.CornerRadius = UDim.new(0, 5)
+    optionCorner.Parent = option
+
+    option.MouseButton1Click:Connect(function()
+        TELEPORT_FIXED = i
+        fixedDropdown.Text = tostring(i) .. " Detik ▼"
+        fixedList.Visible = false
+        if autoTeleport then
+            teleportStatus.Text = "Teleport: ON | Jeda: " .. TELEPORT_FIXED .. " detik"
+        end
+    end)
+end
+
+fixedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    fixedList.CanvasSize = UDim2.new(0, 0, 0, fixedLayout.AbsoluteContentSize.Y + 5)
+end)
+
+fixedDropdown.MouseButton1Click:Connect(function()
+    fixedList.Visible = not fixedList.Visible
+end)
+
+-- ==========================================
+-- STATUS & TOGGLE (tombol kecil side-by-side)
+-- ==========================================
+local teleportStatus = Instance.new("TextLabel")
+teleportStatus.Size = UDim2.new(0.48, -10, 0, 18)
+teleportStatus.Position = UDim2.fromOffset(15, 432)
+applySmallLabel(teleportStatus)
+teleportStatus.Text = "Teleport: OFF"
+teleportStatus.Parent = content
+
+local promptStatus = Instance.new("TextLabel")
+promptStatus.Size = UDim2.new(0.48, -10, 0, 18)
+promptStatus.Position = UDim2.new(0.5, 5, 0, 432)
+applySmallLabel(promptStatus)
+promptStatus.Text = "Proximity: OFF"
+promptStatus.TextXAlignment = Enum.TextXAlignment.Left
+promptStatus.Parent = content
+
+local teleportToggle = Instance.new("TextButton")
+teleportToggle.Size = UDim2.new(0.48, -10, 0, 32)
+teleportToggle.Position = UDim2.fromOffset(15, 452)
+teleportToggle.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+teleportToggle.Text = "AUTO TELEPORT"
+teleportToggle.TextColor3 = Color3.fromRGB(230, 230, 230)
+teleportToggle.TextSize = 12
+teleportToggle.Font = Enum.Font.GothamBold
+teleportToggle.Parent = content
+
+local teleportCorner = Instance.new("UICorner")
+teleportCorner.CornerRadius = UDim.new(0, 6)
+teleportCorner.Parent = teleportToggle
+
+local promptToggle = Instance.new("TextButton")
+promptToggle.Size = UDim2.new(0.48, -10, 0, 32)
+promptToggle.Position = UDim2.new(0.5, 5, 0, 452)
+promptToggle.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+promptToggle.Text = "AUTO PROXIMITY"
+promptToggle.TextColor3 = Color3.fromRGB(230, 230, 230)
+promptToggle.TextSize = 12
+promptToggle.Font = Enum.Font.GothamBold
+promptToggle.Parent = content
+
+local promptCorner = Instance.new("UICorner")
+promptCorner.CornerRadius = UDim.new(0, 6)
+promptCorner.Parent = promptToggle
+
+teleportToggle.MouseButton1Click:Connect(function()
+    autoTeleport = not autoTeleport
+    if autoTeleport then
+        teleportToggle.BackgroundColor3 = Color3.fromRGB(35, 120, 70)
+        teleportStatus.Text = "Teleport: ON | Jeda: " .. TELEPORT_FIXED .. " detik"
+        teleportStatus.TextColor3 = Color3.fromRGB(170, 255, 190)
+    else
+        teleportToggle.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+        teleportStatus.Text = "Teleport: OFF"
+        teleportStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+    end
+end)
+
+promptToggle.MouseButton1Click:Connect(function()
+    autoPrompt = not autoPrompt
+    if autoPrompt then
+        promptToggle.BackgroundColor3 = Color3.fromRGB(35, 120, 70)
+        promptStatus.Text = "Proximity: ON"
+        promptStatus.TextColor3 = Color3.fromRGB(170, 255, 190)
+    else
+        promptToggle.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+        promptStatus.Text = "Proximity: OFF"
+        promptStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+    end
+end)
+
+-- ==========================================
+-- ROOT PART
+-- ==========================================
+local function getRootPart()
+    local character = player.Character
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getNearestCandidate(rootPos, candidates)
+    if not candidates or #candidates == 0 then return nil end
+    local best = nil
+    local bestDist = math.huge
+    for _, c in ipairs(candidates) do
+        if c.cf and c.cf.Position then
+            local d = (c.cf.Position - rootPos).Magnitude
+            if d < bestDist then
+                bestDist = d
+                best = c
+            end
+        end
+    end
+    return best
+end
+
+local function getDelay()
+    return TELEPORT_FIXED
+end
+
+-- ==========================================
+-- AUTO TELEPORT (gabungan logic untuk SpawnBahan & BahanCraft)
+-- - Hanya teleport ke part terdekat per sumber (per spawnKey)
+-- ==========================================
+task.spawn(function()
+    while gui.Parent do
+        if autoTeleport then
+            local rootPart = getRootPart()
+            if rootPart and rootPart.Position then
+                for _, spawnKey in ipairs(materialOrder) do
+                    if not autoTeleport then break end
+                    if selectedMaterials[spawnKey] then
+                        local candidates = {}
+
+                        -- CASE A: SpawnBahan style (named items under spawnFolderA)
+                        if spawnFolderA and spawnFolderA:IsA("Instance") then
+                            for _, item in ipairs(spawnFolderA:GetChildren()) do
+                                if not autoTeleport then break end
+                                if item.Name == spawnKey and item.Parent then
+                                    local success, cf = pcall(function()
+                                        return item:GetPivot()
+                                    end)
+                                    if success and cf then
+                                        table.insert(candidates, {obj = item, cf = cf})
+                                    end
+                                end
+                            end
+                        end
+
+                        -- CASE B: BahanCraft style (search folder under BahanCraft)
+                        if spawnFolderB and spawnFolderB:IsA("Instance") then
+                            local folder = spawnFolderB:FindFirstChild(spawnKey)
+                            if folder then
+                                for _, obj in ipairs(folder:GetDescendants()) do
+                                    if not autoTeleport then break end
+                                    if obj:IsA("BasePart") and obj.Parent then
+                                        local success, cf = pcall(function()
+                                            return obj:GetPivot()
+                                        end)
+                                        if success and cf then
+                                            table.insert(candidates, {obj = obj, cf = cf})
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        -- pilih kandidat terdekat
+                        local nearest = getNearestCandidate(rootPart.Position, candidates)
+                        if nearest and nearest.cf then
+                            -- teleport
+                            rootPart.CFrame = nearest.cf + Vector3.new(0, HEIGHT, 0)
+                            local delay = getDelay()
+                            task.wait(delay)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- ==========================================
+-- AUTO PROXIMITY
+-- ==========================================
+task.spawn(function()
+    while gui.Parent do
+        if autoPrompt then
+            local rootPart = getRootPart()
+            if rootPart then
+                for _, instance in ipairs(workspace:GetDescendants()) do
+                    if not autoPrompt then break end
+                    if instance:IsA("ProximityPrompt") then
+                        local targetPart = instance.Parent
+                        if targetPart and targetPart:IsA("BasePart") and rootPart.Parent then
+                            local distance = (targetPart.Position - rootPart.Position).Magnitude
+                            if distance <= instance.MaxActivationDistance then
+                                pcall(function()
+                                    instance:InputHoldBegin()
+                                    task.wait(instance.HoldDuration)
+                                    instance:InputHoldEnd()
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ==========================================
+-- MINIMIZE / RESTORE
+-- ==========================================
+minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        content.Visible = false
+        main.Size = UDim2.fromOffset(360, 44)
+        minimize.Text = "▢"
+    else
+        content.Visible = true
+        main.Size = UDim2.fromOffset(360, 480)
+        minimize.Text = "▢"
+    end
+end)
+
+-- ==========================================
+-- DRAG / MOVE FRAME
+-- ==========================================
+do
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    header.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+end
