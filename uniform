@@ -1,0 +1,630 @@
+-- AutoFarmGUI_Merged_v7.lua
+-- NGepet (tema: hitam) — perbaikan Auto Proximity & teleport ke semua kandidat
+-- Menampilkan debug kecil di GUI (dan print ke Developer Console)
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local spawnFolderA = workspace:FindFirstChild("SpawnBahan")
+local spawnFolderB = workspace:FindFirstChild("BahanCraft")
+
+-- CONFIG
+local HEIGHT = 3
+local TELEPORT_FIXED = 2 -- jeda tetap (detik)
+
+local materials = {
+    ["Jamur Kuburan"] = { kind = "spawn", key = "Spawn_JamurKuburan" },
+    ["Melati"]         = { kind = "spawn", key = "Spawn_Melati" },
+    ["Gagak"]          = { kind = "spawn", key = "Spawn_Gagak" },
+    ["Kepiting Sungai"]= { kind = "spawn", key = "Spawn_KepitingSungai" },
+    ["Dupa"]           = { kind = "spawn", key = "Spawn_Dupa" },
+    ["Kemenyan"]       = { kind = "spawn", key = "Spawn_Kemenyan" },
+    ["Batu Besar"]     = { kind = "folder", key = "BatuBesar" },
+    ["Pohon Besar"]    = { kind = "folder", key = "PohonBesar" }
+}
+
+-- folderChild mapping (target child names inside each folder)
+local folderChild = {
+    BatuBesar  = "Batu",
+    PohonBesar = "Batang"
+}
+
+local materialOrder = {
+    "Spawn_JamurKuburan",
+    "Spawn_Melati",
+    "Spawn_Gagak",
+    "Spawn_KepitingSungai",
+    "Spawn_Dupa",
+    "Spawn_Kemenyan",
+    "BatuBesar",
+    "PohonBesar"
+}
+
+local keyToDisplay = {}
+for display, info in pairs(materials) do
+    keyToDisplay[info.key] = display
+end
+
+local selectedMaterials = {}
+for _, key in pairs(materialOrder) do selectedMaterials[key] = true end
+
+local autoTeleport = false
+local autoPrompt = false
+local minimized = false
+
+-- remove old GUI
+local oldGui = playerGui:FindFirstChild("AutoFarmGUI")
+if oldGui then oldGui:Destroy() end
+
+-- GUI creation
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoFarmGUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(360, 480)
+main.Position = UDim2.new(0.5, -180, 0.5, -240)
+main.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+main.BorderSizePixel = 0
+main.Parent = gui
+
+local mainCorner = Instance.new("UICorner", main)
+mainCorner.CornerRadius = UDim.new(0, 12)
+
+local header = Instance.new("Frame", main)
+header.Size = UDim2.new(1, 0, 0, 44)
+header.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+header.Active = true
+local headerCorner = Instance.new("UICorner", header)
+headerCorner.CornerRadius = UDim.new(0, 12)
+
+local title = Instance.new("TextLabel", header)
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.fromOffset(15, 0)
+title.BackgroundTransparency = 1
+title.Text = "NGepet by.SAPIGANTENG"
+title.TextColor3 = Color3.fromRGB(230, 230, 230)
+title.TextSize = 17
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local minimize = Instance.new("TextButton", header)
+minimize.Size = UDim2.fromOffset(32, 28)
+minimize.Position = UDim2.new(1, -84, 0, 8)
+minimize.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+minimize.Text = "▢"
+minimize.TextColor3 = Color3.fromRGB(220, 220, 220)
+minimize.TextSize = 16
+minimize.Font = Enum.Font.GothamBold
+Instance.new("UICorner", minimize).CornerRadius = UDim.new(0, 6)
+
+local close = Instance.new("TextButton", header)
+close.Size = UDim2.fromOffset(32, 28)
+close.Position = UDim2.new(1, -44, 0, 8)
+close.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
+close.Text = "X"
+close.TextColor3 = Color3.new(1, 1, 1)
+close.TextSize = 15
+close.Font = Enum.Font.GothamBold
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 6)
+
+close.MouseButton1Click:Connect(function()
+    autoTeleport = false
+    autoPrompt = false
+    gui:Destroy()
+end)
+
+local content = Instance.new("Frame", main)
+content.Size = UDim2.new(1, 0, 1, -44)
+content.Position = UDim2.fromOffset(0, 44)
+content.BackgroundTransparency = 1
+
+local function applySmallLabel(lbl)
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.BackgroundTransparency = 1
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+local materialLabel = Instance.new("TextLabel", content)
+materialLabel.Size = UDim2.new(1, -30, 0, 22)
+materialLabel.Position = UDim2.fromOffset(15, 8)
+applySmallLabel(materialLabel)
+materialLabel.Text = "Pilih bahan:"
+
+local selectAll = Instance.new("TextButton", content)
+selectAll.Size = UDim2.new(0.48, -10, 0, 30)
+selectAll.Position = UDim2.fromOffset(15, 34)
+selectAll.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+selectAll.Text = "PILIH SEMUA"
+selectAll.TextColor3 = Color3.fromRGB(230, 230, 230)
+selectAll.TextSize = 12
+selectAll.Font = Enum.Font.GothamBold
+Instance.new("UICorner", selectAll).CornerRadius = UDim.new(0, 6)
+
+local clearAll = Instance.new("TextButton", content)
+clearAll.Size = UDim2.new(0.48, -10, 0, 30)
+clearAll.Position = UDim2.new(0.5, 5, 0, 34)
+clearAll.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+clearAll.Text = "HAPUS SEMUA"
+clearAll.TextColor3 = Color3.fromRGB(230, 230, 230)
+clearAll.TextSize = 12
+clearAll.Font = Enum.Font.GothamBold
+Instance.new("UICorner", clearAll).CornerRadius = UDim.new(0, 6)
+
+local list = Instance.new("ScrollingFrame", content)
+list.Size = UDim2.new(1, -30, 0, 240)
+list.Position = UDim2.fromOffset(15, 74)
+list.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 6
+list.CanvasSize = UDim2.new(0,0,0,0)
+Instance.new("UICorner", list).CornerRadius = UDim.new(0,8)
+local listPadding = Instance.new("UIPadding", list)
+listPadding.PaddingTop = UDim.new(0,6)
+listPadding.PaddingLeft = UDim.new(0,6)
+listPadding.PaddingRight = UDim.new(0,6)
+local layout = Instance.new("UIListLayout", list)
+layout.Padding = UDim.new(0,6)
+
+local checkboxButtons = {}
+
+local function createCheckbox(displayName, spawnKey)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 0, 32)
+    button.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    button.TextColor3 = Color3.fromRGB(230, 230, 230)
+    button.TextSize = 12
+    button.Font = Enum.Font.Gotham
+    button.TextXAlignment = Enum.TextXAlignment.Left
+    button.Parent = list
+
+    checkboxButtons[spawnKey] = button
+
+    local function update()
+        if selectedMaterials[spawnKey] then
+            button.Text = "☑  " .. displayName
+            button.BackgroundColor3 = Color3.fromRGB(30, 90, 55)
+        else
+            button.Text = "☐  " .. displayName
+            button.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+        end
+    end
+
+    button.MouseButton1Click:Connect(function()
+        selectedMaterials[spawnKey] = not selectedMaterials[spawnKey]
+        update()
+    end)
+
+    update()
+end
+
+for _, key in ipairs(materialOrder) do
+    local display = keyToDisplay[key] or key
+    createCheckbox(display, key)
+end
+
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+end)
+
+selectAll.MouseButton1Click:Connect(function()
+    for _, key in pairs(materialOrder) do selectedMaterials[key] = true end
+    for k,btn in pairs(checkboxButtons) do
+        if btn then
+            btn.Text = "☑  " .. (keyToDisplay[k] or k)
+            btn.BackgroundColor3 = Color3.fromRGB(30,90,55)
+        end
+    end
+end)
+
+clearAll.MouseButton1Click:Connect(function()
+    for _, key in pairs(materialOrder) do selectedMaterials[key] = false end
+    for k,btn in pairs(checkboxButtons) do
+        if btn then
+            btn.Text = "☐  " .. (keyToDisplay[k] or k)
+            btn.BackgroundColor3 = Color3.fromRGB(18,18,18)
+        end
+    end
+end)
+
+-- fixed delay dropdown
+local fixedLabel = Instance.new("TextLabel", content)
+fixedLabel.Size = UDim2.new(0.5, -10, 0, 22)
+fixedLabel.Position = UDim2.fromOffset(15, 328)
+applySmallLabel(fixedLabel)
+fixedLabel.Text = "Jeda Teleport (detik):"
+
+local fixedDropdown = Instance.new("TextButton", content)
+fixedDropdown.Size = UDim2.fromOffset(160, 28)
+fixedDropdown.Position = UDim2.new(0.5, 5, 0, 324)
+fixedDropdown.BackgroundColor3 = Color3.fromRGB(18,18,18)
+fixedDropdown.Text = tostring(TELEPORT_FIXED) .. " Detik ▼"
+fixedDropdown.TextColor3 = Color3.fromRGB(230,230,230)
+fixedDropdown.TextSize = 12
+fixedDropdown.Font = Enum.Font.GothamBold
+Instance.new("UICorner", fixedDropdown).CornerRadius = UDim.new(0,6)
+
+local fixedList = Instance.new("ScrollingFrame", content)
+fixedList.Size = UDim2.fromOffset(160, 200)
+fixedList.Position = UDim2.new(1, -175, 0, 358)
+fixedList.BackgroundColor3 = Color3.fromRGB(12,12,12)
+fixedList.BorderSizePixel = 0
+fixedList.ScrollBarThickness = 5
+fixedList.Visible = false
+fixedList.ZIndex = 100
+fixedList.CanvasSize = UDim2.new(0,0,0,0)
+Instance.new("UICorner", fixedList).CornerRadius = UDim.new(0,6)
+local fixedLayout = Instance.new("UIListLayout", fixedList)
+fixedLayout.Padding = UDim.new(0,2)
+
+for i = 1, 20 do
+    local option = Instance.new("TextButton", fixedList)
+    option.Size = UDim2.new(1, -8, 0, 28)
+    option.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    option.Text = tostring(i) .. " Detik"
+    option.TextColor3 = Color3.fromRGB(230,230,230)
+    option.TextSize = 12
+    option.Font = Enum.Font.Gotham
+    option.ZIndex = 101
+    Instance.new("UICorner", option).CornerRadius = UDim.new(0,5)
+
+    option.MouseButton1Click:Connect(function()
+        TELEPORT_FIXED = i
+        fixedDropdown.Text = tostring(i) .. " Detik ▼"
+        fixedList.Visible = false
+        if autoTeleport then
+            teleportStatus.Text = "Teleport: ON | Jeda: " .. TELEPORT_FIXED .. " detik"
+        end
+    end)
+end
+
+fixedLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    fixedList.CanvasSize = UDim2.new(0, 0, 0, fixedLayout.AbsoluteContentSize.Y + 5)
+end)
+
+fixedDropdown.MouseButton1Click:Connect(function()
+    fixedList.Visible = not fixedList.Visible
+end)
+
+-- status & toggles
+local teleportStatus = Instance.new("TextLabel", content)
+teleportStatus.Size = UDim2.new(0.48, -10, 0, 18)
+teleportStatus.Position = UDim2.fromOffset(15, 432)
+applySmallLabel(teleportStatus)
+teleportStatus.Text = "Teleport: OFF"
+
+local promptStatus = Instance.new("TextLabel", content)
+promptStatus.Size = UDim2.new(0.48, -10, 0, 18)
+promptStatus.Position = UDim2.new(0.5, 5, 0, 432)
+applySmallLabel(promptStatus)
+promptStatus.Text = "Proximity: OFF"
+promptStatus.TextXAlignment = Enum.TextXAlignment.Left
+
+local teleportToggle = Instance.new("TextButton", content)
+teleportToggle.Size = UDim2.new(0.48, -10, 0, 32)
+teleportToggle.Position = UDim2.fromOffset(15, 452)
+teleportToggle.BackgroundColor3 = Color3.fromRGB(28,28,28)
+teleportToggle.Text = "AUTO TELEPORT"
+teleportToggle.TextColor3 = Color3.fromRGB(230,230,230)
+teleportToggle.TextSize = 12
+teleportToggle.Font = Enum.Font.GothamBold
+Instance.new("UICorner", teleportToggle).CornerRadius = UDim.new(0,6)
+
+local promptToggle = Instance.new("TextButton", content)
+promptToggle.Size = UDim2.new(0.48, -10, 0, 32)
+promptToggle.Position = UDim2.new(0.5, 5, 0, 452)
+promptToggle.BackgroundColor3 = Color3.fromRGB(28,28,28)
+promptToggle.Text = "AUTO PROXIMITY"
+promptToggle.TextColor3 = Color3.fromRGB(230,230,230)
+promptToggle.TextSize = 12
+promptToggle.Font = Enum.Font.GothamBold
+Instance.new("UICorner", promptToggle).CornerRadius = UDim.new(0,6)
+
+teleportToggle.MouseButton1Click:Connect(function()
+    autoTeleport = not autoTeleport
+    if autoTeleport then
+        teleportToggle.BackgroundColor3 = Color3.fromRGB(35,120,70)
+        teleportStatus.Text = "Teleport: ON | Jeda: " .. TELEPORT_FIXED .. " detik"
+        teleportStatus.TextColor3 = Color3.fromRGB(170,255,190)
+    else
+        teleportToggle.BackgroundColor3 = Color3.fromRGB(28,28,28)
+        teleportStatus.Text = "Teleport: OFF"
+        teleportStatus.TextColor3 = Color3.fromRGB(255,120,120)
+    end
+end)
+
+promptToggle.MouseButton1Click:Connect(function()
+    autoPrompt = not autoPrompt
+    if autoPrompt then
+        promptToggle.BackgroundColor3 = Color3.fromRGB(35,120,70)
+        promptStatus.Text = "Proximity: ON"
+        promptStatus.TextColor3 = Color3.fromRGB(170,255,190)
+    else
+        promptToggle.BackgroundColor3 = Color3.fromRGB(28,28,28)
+        promptStatus.Text = "Proximity: OFF"
+        promptStatus.TextColor3 = Color3.fromRGB(255,120,120)
+    end
+end)
+
+-- debug label (on-screen)
+local debugLabel = Instance.new("TextLabel", main)
+debugLabel.AnchorPoint = Vector2.new(1, 1)
+debugLabel.Position = UDim2.new(1, -8, 1, -8)
+debugLabel.Size = UDim2.fromOffset(220, 40)
+debugLabel.BackgroundTransparency = 0.6
+debugLabel.BackgroundColor3 = Color3.fromRGB(8,8,8)
+debugLabel.TextColor3 = Color3.fromRGB(200,200,200)
+debugLabel.TextSize = 12
+debugLabel.Font = Enum.Font.Gotham
+debugLabel.Text = "Debug: ready"
+Instance.new("UICorner", debugLabel).CornerRadius = UDim.new(0,6)
+
+-- root part
+local function getRootPart()
+    local character = player.Character
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getDelay()
+    return TELEPORT_FIXED
+end
+
+-- AUTO TELEPORT: teleport to ALL matching candidates
+task.spawn(function()
+    while gui.Parent do
+        if autoTeleport then
+            local rootPart = getRootPart()
+            if rootPart and rootPart.Position then
+                for _, spawnKey in ipairs(materialOrder) do
+                    if not autoTeleport then break end
+                    if selectedMaterials[spawnKey] then
+                        -- SpawnBahan style
+                        if spawnFolderA and spawnFolderA:IsA("Instance") then
+                            for _, item in ipairs(spawnFolderA:GetChildren()) do
+                                if not autoTeleport then break end
+                                if item.Name == spawnKey and item.Parent then
+                                    local ok, cf = pcall(function() return item:GetPivot() end)
+                                    if ok and cf then
+                                        rootPart.CFrame = cf + Vector3.new(0, HEIGHT, 0)
+                                        print("[AutoTeleport] Teleported to spawn:", spawnKey)
+                                        task.wait(getDelay())
+                                    end
+                                end
+                            end
+                        end
+
+                        -- BahanCraft style: find folder and then all matching descendants named as folderChild[spawnKey]
+                        if spawnFolderB and spawnFolderB:IsA("Instance") then
+                            local folder = spawnFolderB:FindFirstChild(spawnKey)
+                            if folder then
+                                local targetName = folderChild[spawnKey]
+                                if targetName then
+                                    for _, obj in ipairs(folder:GetDescendants()) do
+                                        if not autoTeleport then break end
+                                        if obj.Name == targetName and obj:IsA("BasePart") and obj.Parent then
+                                            local ok, cf = pcall(function() return obj:GetPivot() end)
+                                            if ok and cf then
+                                                rootPart.CFrame = cf + Vector3.new(0, HEIGHT, 0)
+                                                print("[AutoTeleport] Teleported to BahanCraft:", spawnKey, "->", targetName)
+                                                task.wait(getDelay())
+                                            end
+                                        end
+                                    end
+                                else
+                                    -- fallback: all BaseParts
+                                    for _, obj in ipairs(folder:GetDescendants()) do
+                                        if not autoTeleport then break end
+                                        if obj:IsA("BasePart") and obj.Parent then
+                                            local ok, cf = pcall(function() return obj:GetPivot() end)
+                                            if ok and cf then
+                                                rootPart.CFrame = cf + Vector3.new(0, HEIGHT, 0)
+                                                print("[AutoTeleport] Teleported to BahanCraft fallback:", spawnKey)
+                                                task.wait(getDelay())
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- AUTO PROXIMITY: maintain dynamic registry and handle Attachment->BasePart parents
+local promptRegistry = {}
+local lastActivated = {}
+
+local function registerPrompt(p)
+    if p and p:IsA and p:IsA("ProximityPrompt") then
+        promptRegistry[p] = true
+        -- update debug count
+        local count = 0 for _ in pairs(promptRegistry) do count = count + 1 end
+        debugLabel.Text = ("Debug: prompts=%d"):format(count)
+        print("[AutoProx] Registered prompt:", p.Name)
+    end
+end
+
+local function unregisterPrompt(p)
+    if promptRegistry[p] then
+        promptRegistry[p] = nil
+        lastActivated[p] = nil
+        local count = 0 for _ in pairs(promptRegistry) do count = count + 1 end
+        debugLabel.Text = ("Debug: prompts=%d"):format(count)
+        print("[AutoProx] Unregistered prompt:", p.Name)
+    end
+end
+
+-- initial collect
+for _, d in ipairs(workspace:GetDescendants()) do
+    if d:IsA and d:IsA("ProximityPrompt") then
+        registerPrompt(d)
+    end
+end
+
+workspace.DescendantAdded:Connect(function(d)
+    if d and d:IsA and d:IsA("ProximityPrompt") then
+        registerPrompt(d)
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(d)
+    if d and d:IsA and d:IsA("ProximityPrompt") then
+        unregisterPrompt(d)
+    end
+end)
+
+task.spawn(function()
+    while gui.Parent do
+        if autoPrompt then
+            local rootPart = getRootPart()
+            if rootPart and rootPart.Position then
+                -- snapshot keys to avoid mutation issues while iterating
+                local prompts = {}
+                for p in pairs(promptRegistry) do table.insert(prompts, p) end
+
+                for _, promptObj in ipairs(prompts) do
+                    if not autoPrompt then break end
+                    if not promptObj or not promptObj.Parent then
+                        promptRegistry[promptObj] = nil
+                        lastActivated[promptObj] = nil
+                        goto continue_in_loop
+                    end
+
+                    if not promptObj.Enabled then
+                        goto continue_in_loop
+                    end
+
+                    -- climb ancestors until BasePart found (Attachment -> BasePart)
+                    local base = promptObj.Parent
+                    while base and not base:IsA("BasePart") do
+                        base = base.Parent
+                    end
+                    if not base or not base:IsA("BasePart") then
+                        goto continue_in_loop
+                    end
+
+                    local ok, dist = pcall(function()
+                        return (base.Position - rootPart.Position).Magnitude
+                    end)
+                    if not ok or not dist then
+                        goto continue_in_loop
+                    end
+
+                    if dist <= (promptObj.MaxActivationDistance or 0) then
+                        local now = tick()
+                        local last = lastActivated[promptObj] or 0
+                        if now - last >= 0.5 then
+                            local success, err = pcall(function()
+                                promptObj:InputHoldBegin()
+                                local hold = promptObj.HoldDuration or 0.1
+                                task.wait(hold)
+                                promptObj:InputHoldEnd()
+                            end)
+                            if success then
+                                debugLabel.Text = ("Debug: Activated '%s' (%.1f)"):format(tostring(promptObj.Name), dist)
+                                print(string.format("[AutoProx] Activated prompt '%s' (dist=%.2f)", tostring(promptObj.Name), dist))
+                            else
+                                warn("[AutoProx] Failed to activate prompt:", promptObj, err)
+                            end
+                            lastActivated[promptObj] = now
+                            task.wait(0.05)
+                        end
+                    end
+
+                    ::continue_in_loop::
+                end
+            end
+        end
+        task.wait(0.12)
+    end
+end)
+
+-- MINIMIZE / RESTORE
+minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        content.Visible = false
+        main.Size = UDim2.fromOffset(360, 44)
+        minimize.Text = "▢"
+    else
+        content.Visible = true
+        main.Size = UDim2.fromOffset(360, 480)
+        minimize.Text = "▢"
+    end
+end)
+
+-- DRAG / CLAMP
+do
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function clampPosition(pos)
+        local scaleX = pos.X.Scale
+        local offsetX = pos.X.Offset
+        local scaleY = pos.Y.Scale
+        local offsetY = pos.Y.Offset
+
+        local screenW = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.X or 1280
+        local screenH = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.Y or 720
+
+        local frameW = main.AbsoluteSize.X
+        local frameH = main.AbsoluteSize.Y
+
+        local px = screenW * scaleX + offsetX
+        local py = screenH * scaleY + offsetY
+
+        px = math.clamp(px, 0, math.max(0, screenW - frameW))
+        py = math.clamp(py, 0, math.max(0, screenH - frameH))
+
+        return UDim2.new(0, px, 0, py)
+    end
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        local newPos = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+        main.Position = clampPosition(newPos)
+    end
+
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    header.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+end
